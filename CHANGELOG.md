@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.0-beta.3](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-11-27)
+
+
+### Features
+
+* collapsible folder tree in the Projects view ([#10](https://github.com/anggerari/diskdiet/issues/10)) ([6290f1b](https://github.com/anggerari/diskdiet/commit/6290f1b0e5e3a7f13c35d3bf20521bed5ad2a355))
+* Disk Diet app name, app icon, review filter and smoother progress ([#7](https://github.com/anggerari/diskdiet/issues/7)) ([50e8523](https://github.com/anggerari/diskdiet/commit/50e852345dad75478971b3a14642b093a3005589))
+
+
+### Bug Fixes
+
+* smart cache cleanup works from the app and falls back if it can't ([#8](https://github.com/anggerari/diskdiet/issues/8)) ([c38b103](https://github.com/anggerari/diskdiet/commit/c38b103d44941cc691a7e5c4c66d3b4f7d70a2d4))
+
 ## [0.1.0-beta.2](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.1...v0.1.0-beta.2) (2026-11-27)
 
 

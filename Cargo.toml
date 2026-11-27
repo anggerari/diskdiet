@@ -1,6 +1,6 @@
 [package]
 name = "diskdiet"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 edition = "2021"
 description = "Put your storage on a diet: reclaim space from node_modules, build artifacts, package-manager caches and Docker"
 license = "MIT"
