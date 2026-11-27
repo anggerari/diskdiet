@@ -129,7 +129,47 @@ enum SortKey {
 
 enum Line {
     Group(Category),
-    Item(usize),
+    Folder {
+        key: PathBuf,
+        label: String,
+        depth: usize,
+        members: Vec<usize>,
+    },
+    /// `leaf`: the row sits inside its project's folder, so show the
+    /// artifact's own name (node_modules, .next) instead of the project name.
+    Item {
+        i: usize,
+        depth: usize,
+        leaf: bool,
+    },
+}
+
+/// Folder tree for the Projects view.
+#[derive(Default)]
+struct Node {
+    children: BTreeMap<String, Node>,
+    items: Vec<usize>,
+}
+
+impl Node {
+    fn collect(&self, out: &mut Vec<usize>) {
+        out.extend(&self.items);
+        for c in self.children.values() {
+            c.collect(out);
+        }
+    }
+}
+
+fn common_ancestor<'a>(mut dirs: impl Iterator<Item = &'a Path>) -> Option<PathBuf> {
+    let mut acc = dirs.next()?.to_path_buf();
+    for d in dirs {
+        while !d.starts_with(&acc) {
+            if !acc.pop() {
+                return Some(PathBuf::new());
+            }
+        }
+    }
+    Some(acc)
 }
 
 #[derive(PartialEq)]
@@ -189,6 +229,11 @@ struct App {
     focus_search: bool,
     sort: (SortKey, bool),
     collapsed: HashSet<Category>,
+    /// Projects view: group rows into a collapsible folder tree.
+    folder_mode: bool,
+    folder_open: std::collections::HashMap<PathBuf, bool>,
+    /// Set by "Expand all" / "Collapse all"; otherwise only the top level is open.
+    folder_default: Option<bool>,
     pending: Option<Vec<usize>>,
     toast: Option<Toast>,
     // background work
@@ -612,6 +657,9 @@ impl App {
             focus_search: false,
             sort: (SortKey::Size, true),
             collapsed: HashSet::new(),
+            folder_mode: true,
+            folder_open: std::collections::HashMap::new(),
+            folder_default: None,
             pending: None,
             toast: None,
             phase: Phase::Idle,
@@ -805,13 +853,168 @@ impl App {
         v
     }
 
+    fn folder_tree_active(&self) -> bool {
+        self.folder_mode && !self.review_only && self.view == View::Cleanup(Some(Category::Project))
+    }
+
+    fn is_open(&self, key: &Path, depth: usize) -> bool {
+        self.folder_open
+            .get(key)
+            .copied()
+            .unwrap_or(self.folder_default.unwrap_or(depth == 0))
+    }
+
+    fn folder_lines(&self, visible: &[usize]) -> Vec<Line> {
+        let project_dir = |i: usize| -> Option<PathBuf> {
+            self.rows[i]
+                .reveal
+                .as_ref()?
+                .parent()
+                .map(Path::to_path_buf)
+        };
+        let with_dirs: Vec<(usize, PathBuf)> = visible
+            .iter()
+            .filter_map(|&i| project_dir(i).map(|d| (i, d)))
+            .collect();
+        let Some(mut root) = common_ancestor(with_dirs.iter().map(|(_, d)| d.as_path())) else {
+            return visible
+                .iter()
+                .map(|&i| Line::Item {
+                    i,
+                    depth: 0,
+                    leaf: false,
+                })
+                .collect();
+        };
+        // Keep at least one folder level above the projects.
+        if with_dirs.iter().any(|(_, d)| *d == root) {
+            root.pop();
+        }
+        let mut tree = Node::default();
+        for (i, dir) in &with_dirs {
+            let mut node = &mut tree;
+            if let Ok(rel) = dir.strip_prefix(&root) {
+                for part in rel.components() {
+                    node = node
+                        .children
+                        .entry(part.as_os_str().to_string_lossy().into_owned())
+                        .or_default();
+                }
+            }
+            node.items.push(*i);
+        }
+        let mut out = Vec::new();
+        self.flatten(&tree, &root, 0, false, &mut out);
+        // Items without a path (shouldn't happen for projects) go last.
+        for &i in visible {
+            if project_dir(i).is_none() {
+                out.push(Line::Item {
+                    i,
+                    depth: 0,
+                    leaf: false,
+                });
+            }
+        }
+        out
+    }
+
+    fn flatten(&self, node: &Node, path: &Path, depth: usize, leaf: bool, out: &mut Vec<Line>) {
+        enum Entry<'a> {
+            Item(usize),
+            Folder(String, PathBuf, &'a Node, Vec<usize>),
+        }
+        let size_of = |ids: &[usize]| ids.iter().map(|&i| self.rows[i].size).sum::<u64>();
+        let mut entries: Vec<Entry> = node.items.iter().map(|&i| Entry::Item(i)).collect();
+        for (name, child) in &node.children {
+            // Merge chains of folders that only lead to one other folder.
+            let (mut label, mut key, mut cur) = (name.clone(), path.join(name), child);
+            while cur.items.is_empty() && cur.children.len() == 1 {
+                let (n, c) = cur.children.iter().next().unwrap();
+                label = format!("{label}/{n}");
+                key = key.join(n);
+                cur = c;
+            }
+            let mut members = Vec::new();
+            cur.collect(&mut members);
+            entries.push(Entry::Folder(label, key, cur, members));
+        }
+        let (key, desc) = self.sort;
+        let rank = |e: &Entry| -> (u64, String, u64) {
+            match e {
+                Entry::Item(i) => (
+                    self.rows[*i].size,
+                    self.rows[*i].name.to_lowercase(),
+                    self.rows[*i].age_days.unwrap_or(0),
+                ),
+                Entry::Folder(label, _, _, m) => (
+                    size_of(m),
+                    label.to_lowercase(),
+                    m.iter()
+                        .filter_map(|&i| self.rows[i].age_days)
+                        .min()
+                        .unwrap_or(0),
+                ),
+            }
+        };
+        entries.sort_by(|a, b| {
+            let (ra, rb) = (rank(a), rank(b));
+            let ord = match key {
+                SortKey::Size => ra.0.cmp(&rb.0),
+                SortKey::Name => ra.1.cmp(&rb.1),
+                SortKey::Age => ra.2.cmp(&rb.2),
+            };
+            if desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+        for e in entries {
+            match e {
+                Entry::Item(i) => out.push(Line::Item { i, depth, leaf }),
+                // A folder holding a single item: just show the item.
+                Entry::Folder(_, _, cur, members)
+                    if members.len() == 1 && cur.children.is_empty() =>
+                {
+                    out.push(Line::Item {
+                        i: members[0],
+                        depth,
+                        leaf: false,
+                    })
+                }
+                Entry::Folder(label, key, cur, members) => {
+                    let open = self.is_open(&key, depth);
+                    out.push(Line::Folder {
+                        key: key.clone(),
+                        label,
+                        depth,
+                        members,
+                    });
+                    if open {
+                        self.flatten(cur, &key, depth + 1, true, out);
+                    }
+                }
+            }
+        }
+    }
+
     fn lines(&self, visible: &[usize]) -> Vec<Line> {
+        if self.folder_tree_active() {
+            return self.folder_lines(visible);
+        }
         let grouped = !self.review_only
             && self.view == View::Cleanup(None)
             && self.search.trim().is_empty()
             && self.kind_filter.is_none();
         if !grouped {
-            return visible.iter().map(|&i| Line::Item(i)).collect();
+            return visible
+                .iter()
+                .map(|&i| Line::Item {
+                    i,
+                    depth: 0,
+                    leaf: false,
+                })
+                .collect();
         }
         let mut out = Vec::new();
         for c in CATEGORIES {
@@ -825,7 +1028,11 @@ impl App {
             }
             out.push(Line::Group(c));
             if !self.collapsed.contains(&c) {
-                out.extend(members.into_iter().map(Line::Item));
+                out.extend(members.into_iter().map(|i| Line::Item {
+                    i,
+                    depth: 0,
+                    leaf: false,
+                }));
             }
         }
         out
@@ -880,6 +1087,13 @@ impl App {
                 Ok("stats") => self.view = View::Stats,
                 Ok("projects") => self.view = View::Cleanup(Some(Category::Project)),
                 Ok("review") => self.review_only = true,
+                Ok("folders") => {
+                    self.view = View::Cleanup(Some(Category::Project));
+                    self.folder_open.insert(
+                        PathBuf::from(std::env::var("DISKDIET_SNAPSHOT_OPEN").unwrap_or_default()),
+                        true,
+                    );
+                }
                 Ok("progress") => {
                     self.phase = Phase::Deleting;
                     self.shared.lock().unwrap().progress = (5, 23);
@@ -1349,6 +1563,11 @@ impl App {
         let mut clicked: Option<Option<String>> = None;
         let visible = self.visible();
         let mut select: Option<bool> = None;
+        let projects_view =
+            self.view == View::Cleanup(Some(Category::Project)) && !self.review_only;
+        let folder_mode = self.folder_mode;
+        let mut set_mode: Option<bool> = None;
+        let mut set_default: Option<bool> = None;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -1441,6 +1660,53 @@ impl App {
                 {
                     select = Some(true);
                 }
+                if projects_view {
+                    ui.add_space(10.0);
+                    if folder_mode {
+                        if ui.link(RichText::new("Collapse all").size(12.0)).clicked() {
+                            set_default = Some(false);
+                        }
+                        ui.label(RichText::new("·").color(p.faint));
+                        if ui.link(RichText::new("Expand all").size(12.0)).clicked() {
+                            set_default = Some(true);
+                        }
+                        ui.add_space(10.0);
+                    }
+                    // Segmented List | Folders switch (laid out right-to-left).
+                    for (label, mode) in [("Folders", true), ("List", false)] {
+                        let active = folder_mode == mode;
+                        let g = ui.painter().layout_no_wrap(
+                            label.to_string(),
+                            FontId::proportional(12.0),
+                            if active { p.text } else { p.dim },
+                        );
+                        let (r, resp) =
+                            ui.allocate_exact_size(g.size() + Vec2::new(18.0, 8.0), Sense::click());
+                        let fill = if active {
+                            p.card
+                        } else if resp.hovered() {
+                            p.hover
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(r, 6.0, fill);
+                        if active {
+                            ui.painter().rect_stroke(
+                                r,
+                                6.0,
+                                Stroke::new(1.0, p.border),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        ui.painter().galley(r.center() - g.size() / 2.0, g, p.text);
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if resp.clicked() {
+                            set_mode = Some(mode);
+                        }
+                    }
+                }
             });
         });
         if let Some(c) = clicked {
@@ -1451,6 +1717,13 @@ impl App {
         }
         if let Some(on) = select {
             self.set_all(&visible, on);
+        }
+        if let Some(m) = set_mode {
+            self.folder_mode = m;
+        }
+        if let Some(d) = set_default {
+            self.folder_default = Some(d);
+            self.folder_open.clear();
         }
     }
 
@@ -1548,6 +1821,8 @@ impl App {
         let mut toggles: Vec<usize> = Vec::new();
         let mut group_set: Option<(Category, bool)> = None;
         let mut collapse: Option<Category> = None;
+        let mut folder_toggle: Option<(PathBuf, bool)> = None;
+        let mut folder_set: Option<(Vec<usize>, bool)> = None;
         let mut delete_one: Option<usize> = None;
         let mut sort_click: Option<SortKey> = None;
         let sort = self.sort;
@@ -1581,7 +1856,8 @@ impl App {
             .show(ui, |ui| {
                 let heights = lines.iter().map(|l| match l {
                     Line::Group(_) => 36.0,
-                    Line::Item(_) => 50.0,
+                    Line::Folder { .. } => 40.0,
+                    Line::Item { .. } => 50.0,
                 });
                 TableBuilder::new(ui)
                     .id_salt("results")
@@ -1645,8 +1921,96 @@ impl App {
                         h.col(|ui| head(ui, "", None, false));
                     })
                     .body(|body| {
-                        body.heterogeneous_rows(heights, |mut row| match lines[row.index()] {
+                        body.heterogeneous_rows(heights, |mut row| match &lines[row.index()] {
+                            Line::Folder {
+                                key,
+                                label,
+                                depth,
+                                members,
+                            } => {
+                                let (mut on, mut bytes, mut newest) = (0, 0u64, None::<u64>);
+                                for &i in members {
+                                    bytes += rows[i].size;
+                                    on += usize::from(selected[i]);
+                                    if let Some(d) = rows[i].age_days {
+                                        newest = Some(newest.map_or(d, |n: u64| n.min(d)));
+                                    }
+                                }
+                                let st = match on {
+                                    0 => Check::Off,
+                                    x if x == members.len() => Check::On,
+                                    _ => Check::Mixed,
+                                };
+                                let open = self.is_open(key, *depth);
+                                let mut action = false;
+                                row.col(|ui| {
+                                    if check_widget(ui, st, p).clicked() && !busy {
+                                        folder_set = Some((members.clone(), st != Check::On));
+                                        action = true;
+                                    }
+                                });
+                                row.col(|ui| {
+                                    ui.add_space(*depth as f32 * 18.0);
+                                    let chev = if open {
+                                        Icon::ChevronDown
+                                    } else {
+                                        Icon::ChevronRight
+                                    };
+                                    icons::icon(ui, chev, 14.0, p.dim);
+                                    icons::icon(ui, Icon::Folder, 15.0, p.dim);
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(label).strong().color(p.text),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(pretty_path(key, &self.home));
+                                    ui.label(
+                                        RichText::new(format!("{} items", members.len()))
+                                            .size(12.0)
+                                            .color(p.faint),
+                                    );
+                                });
+                                row.col(|_| {});
+                                row.col(|ui| {
+                                    if let Some(d) = newest {
+                                        ui.label(
+                                            RichText::new(age_words(d)).size(12.5).color(p.faint),
+                                        );
+                                    }
+                                });
+                                row.col(|ui| {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        ui.label(
+                                            RichText::new(human_bytes(bytes))
+                                                .monospace()
+                                                .strong()
+                                                .color(p.text),
+                                        );
+                                    });
+                                });
+                                row.col(|ui| {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if icons::icon_button(
+                                            ui,
+                                            Icon::Reveal,
+                                            p.faint,
+                                            p.text,
+                                            "Show in Finder",
+                                        )
+                                        .clicked()
+                                        {
+                                            engine::reveal(key);
+                                            action = true;
+                                        }
+                                    });
+                                });
+                                if !action && row.response().clicked() {
+                                    folder_toggle = Some((key.clone(), open));
+                                }
+                            }
                             Line::Group(c) => {
+                                let c = *c;
                                 let (st, n, bytes) = group_state(c);
                                 let is_collapsed = collapsed.contains(&c);
                                 row.col(|ui| {
@@ -1686,9 +2050,19 @@ impl App {
                                     collapse = Some(c);
                                 }
                             }
-                            Line::Item(i) => {
+                            Line::Item { i, depth, leaf } => {
+                                let (i, depth, leaf) = (*i, *depth, *leaf);
                                 let r = &rows[i];
                                 let sel = selected[i];
+                                // Inside a project folder, name the thing being cleaned.
+                                let leaf_name = if leaf {
+                                    r.reveal
+                                        .as_ref()
+                                        .and_then(|p| p.file_name())
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                } else {
+                                    None
+                                };
                                 row.set_selected(sel);
                                 let mut action = false;
                                 row.col(|ui| {
@@ -1702,6 +2076,7 @@ impl App {
                                     );
                                 });
                                 row.col(|ui| {
+                                    ui.add_space(depth as f32 * 18.0);
                                     chip(ui, &r.chip);
                                     ui.add_space(2.0);
                                     ui.vertical(|ui| {
@@ -1709,7 +2084,11 @@ impl App {
                                         ui.horizontal(|ui| {
                                             ui.add(
                                                 egui::Label::new(
-                                                    RichText::new(&r.name).color(p.text).strong(),
+                                                    RichText::new(
+                                                        leaf_name.as_deref().unwrap_or(&r.name),
+                                                    )
+                                                    .color(p.text)
+                                                    .strong(),
                                                 )
                                                 .truncate(),
                                             );
@@ -1799,6 +2178,12 @@ impl App {
                 .copied()
                 .filter(|&i| self.rows[i].category == c)
                 .collect();
+            self.set_all(&members, on);
+        }
+        if let Some((key, open)) = folder_toggle {
+            self.folder_open.insert(key, !open);
+        }
+        if let Some((members, on)) = folder_set {
             self.set_all(&members, on);
         }
         if let Some(c) = collapse {
