@@ -101,6 +101,7 @@ diskdiet-gui --scan ~/code   # open and start scanning right away
 It's a single native binary of a few megabytes, with no browser engine inside. It follows your system's light or dark theme.
 
 - **Everything on one screen**, grouped into Projects, Caches, Docker and Big files, with collapsible groups and counts in the sidebar.
+- **Folder tree in Projects**: projects grouped by the folders they live in, with totals per folder, collapsible, and checkboxes that select a whole folder. Switch to a flat **List** any time.
 - **Filter pills** by ecosystem (Node, Rust, Flutter, Python…), **search** by name or path, and **sort** by size, name or last touched.
 - **Every row tells you why**: ecosystem badge, project name, full path, and status pills such as `uncommitted`, `merged worktree`, `may hold data` or `smart prune`.
 - **Storage card**: live free space, plus how much you'll have *after* cleanup as you select.
