@@ -1298,6 +1298,9 @@ impl App {
                                 icons::icon(ui, Icon::Search, 14.0, p.faint);
                                 let te = egui::TextEdit::singleline(&mut self.search)
                                     .frame(egui::Frame::NONE)
+                                    .margin(egui::Margin::ZERO)
+                                    .align(Align2::LEFT_CENTER)
+                                    .min_size(Vec2::new(0.0, 22.0))
                                     .hint_text("Search name or path")
                                     .desired_width(196.0);
                                 let resp = ui.add(te);

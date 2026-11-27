@@ -207,43 +207,32 @@ pub fn icon_button(
     resp
 }
 
-/// The app mark: a storage drive with a pinched waist, cinched by a belt
-/// with a buckle. Drawn as two convex halves (top and bottom) with the belt
-/// gap between them. Coordinates follow the 104x104 logo SVG.
-pub fn mark(painter: &Painter, rect: Rect, accent: Color32, hole: Color32) {
+/// The app mark: storage as a donut chart, with the slice diskdiet gives
+/// back pulled out and faded. Geometry matches docs/logo-*.svg (104x104).
+pub fn mark(painter: &Painter, rect: Rect, accent: Color32, _bg: Color32) {
     let k = rect.width() / 104.0;
-    let p = |x: f32, y: f32| Pos2::new(rect.left() + x * k, rect.top() + y * k);
-    let quad = |pts: &mut Vec<Pos2>, a: (f32, f32), c: (f32, f32), b: (f32, f32)| {
-        for i in 0..=8 {
-            let t = i as f32 / 8.0;
-            let u = 1.0 - t;
-            pts.push(p(
-                u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
-                u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
-            ));
-        }
+    let arc = |cx: f32, cy: f32, from: f32, to: f32| -> Vec<Pos2> {
+        (0..=48)
+            .map(|i| {
+                let a = (from + (to - from) * i as f32 / 48.0).to_radians();
+                Pos2::new(
+                    rect.left() + (cx + 35.0 * a.cos()) * k,
+                    rect.top() + (cy + 35.0 * a.sin()) * k,
+                )
+            })
+            .collect()
     };
-    let mut top = vec![p(16.0, 47.0)];
-    quad(&mut top, (8.0, 28.0), (8.0, 8.0), (28.0, 8.0));
-    quad(&mut top, (76.0, 8.0), (96.0, 8.0), (96.0, 28.0));
-    top.push(p(88.0, 47.0));
-    painter.add(Shape::convex_polygon(top, accent, Stroke::NONE));
-
-    let mut bottom = vec![p(88.0, 57.0)];
-    quad(&mut bottom, (96.0, 76.0), (96.0, 96.0), (76.0, 96.0));
-    quad(&mut bottom, (28.0, 96.0), (8.0, 96.0), (8.0, 76.0));
-    bottom.push(p(16.0, 57.0));
-    painter.add(Shape::convex_polygon(bottom, accent, Stroke::NONE));
-
-    // Buckle
-    painter.rect_filled(
-        Rect::from_min_max(p(42.0, 44.0), p(62.0, 60.0)),
-        3.0 * k,
-        accent,
+    let width = 18.0 * k;
+    painter.add(Shape::line(
+        arc(52.0, 52.0, -25.0, 245.0),
+        Stroke::new(width, accent),
+    ));
+    let (ox, oy) = (
+        52.0 + 7.0 * (-70f32).to_radians().cos(),
+        52.0 + 7.0 * (-70f32).to_radians().sin(),
     );
-    painter.rect_filled(
-        Rect::from_min_max(p(48.0, 49.0), p(56.0, 55.0)),
-        1.0 * k,
-        hole,
-    );
+    painter.add(Shape::line(
+        arc(ox, oy, -105.0, -35.0),
+        Stroke::new(width, accent.gamma_multiply(0.45)),
+    ));
 }
