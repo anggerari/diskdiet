@@ -16,18 +16,21 @@ cask "diskdiet" do
          intel: "$(sha x86_64)"
 
   url "https://github.com/anggerari/diskdiet/releases/download/v#{version}/diskdiet-app-v#{version}-#{arch}-apple-darwin.zip"
-  name "diskdiet"
+  name "Disk Diet"
   desc "Put your storage on a diet: clean dev junk, caches and Docker leftovers"
   homepage "https://github.com/anggerari/diskdiet"
 
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
-  app "diskdiet.app"
+  app "Disk Diet.app"
 
   # The app is not notarized yet (beta); let it open without a Gatekeeper prompt.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/diskdiet.app"]
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-dr", "com.apple.quarantine", "{{appdir}}/Disk Diet.app"],
+        must_succeed:   false,
+        writable_paths: ["Disk Diet.app"],
+        writable_base:  :appdir
   end
 
   zap trash: [
