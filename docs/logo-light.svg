@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="104" viewBox="0 0 400 104" fill="none" role="img" aria-label="diskdiet">
+  <defs>
+    <mask id="cut">
+      <rect width="104" height="104" fill="#fff"/>
+      <!-- the belt: a diet for your drive -->
+      <rect x="0" y="49" width="104" height="11" fill="#000"/>
+      <!-- status lights -->
+      <circle cx="51" cy="30" r="6.5" fill="#000"/>
+      <circle cx="71" cy="30" r="6.5" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="8" y="8" width="88" height="88" rx="24" fill="#1F8A4C" mask="url(#cut)"/>
+  <text x="120" y="71" fill="#1F2328" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-1.5">diskdiet</text>
+</svg>

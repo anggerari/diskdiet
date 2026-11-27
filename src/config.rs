@@ -127,7 +127,33 @@ impl Config {
         fs::write(&p, TEMPLATE)?;
         Ok(p)
     }
+}
 
+/// Write the desktop app's settings into the config file, keeping every
+/// other key. (Comments in the file are not preserved.)
+pub fn save_defaults(home: &Path, values: &[(&str, toml::Value)]) -> Result<PathBuf> {
+    let p = path(home);
+    let mut table: toml::Table = if p.exists() {
+        toml::from_str(&fs::read_to_string(&p)?)
+            .with_context(|| format!("invalid config {}", p.display()))?
+    } else {
+        toml::Table::new()
+    };
+    for (k, v) in values {
+        table.insert((*k).to_string(), v.clone());
+    }
+    // Make sure the result still loads.
+    let text = toml::to_string_pretty(&table)?;
+    Config::parse(&text)?;
+    fs::create_dir_all(p.parent().unwrap())?;
+    fs::write(
+        &p,
+        format!("# diskdiet config (written by the desktop app)\n{text}"),
+    )?;
+    Ok(p)
+}
+
+impl Config {
     pub fn protected_paths(&self, home: &Path) -> Vec<PathBuf> {
         self.protected
             .iter()
@@ -177,6 +203,23 @@ mod tests {
         assert!(c.is_protected(Path::new("/home/u/code/keep/node_modules"), home));
         assert!(c.is_protected(Path::new("/x/vendor-lock/node_modules"), home));
         assert!(!c.is_protected(Path::new("/home/u/code/app/node_modules"), home));
+    }
+
+    #[test]
+    fn save_defaults_roundtrip() {
+        let home = std::env::temp_dir().join(format!("diskdiet-cfg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        std::env::remove_var("XDG_CONFIG_HOME");
+        save_defaults(&home, &[("trash", toml::Value::Boolean(true))]).unwrap();
+        save_defaults(
+            &home,
+            &[("paths", toml::Value::Array(vec!["~/code".into()]))],
+        )
+        .unwrap();
+        let c = Config::load(&home).unwrap();
+        assert!(c.trash);
+        assert_eq!(c.paths, vec!["~/code"]);
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

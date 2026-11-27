@@ -1,16 +1,47 @@
-# diskdiet 🍔➡️🥗
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img src="docs/logo-light.svg" alt="diskdiet" width="340">
+  </picture>
+</p>
 
-[![CI](https://github.com/anggerari/diskdiet/actions/workflows/ci.yml/badge.svg)](https://github.com/anggerari/diskdiet/actions/workflows/ci.yml)
-![status: beta](https://img.shields.io/badge/status-beta-orange)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+<h1 align="center">diskdiet: put your storage on a diet</h1>
 
-> Put your storage on a diet.
+<p align="center">
+  You build fast with AI. Your storage fills up just as fast.<br>
+  diskdiet finds the <code>node_modules</code>, build folders, package caches and Docker leftovers eating your storage,<br>
+  shows you what each one costs, and lets you pick what goes. CLI + a small native desktop app, written in Rust.
+</p>
 
-Your storage is not full of photos. It's full of `node_modules`, Rust `target/` folders, Flutter builds, npm/pnpm/yarn caches, Xcode DerivedData and Docker images you forgot about. **diskdiet** finds all of it, shows you what each item costs, and lets you pick what goes. It comes as a fast CLI and a small desktop app.
+<p align="center">
+  <a href="https://github.com/anggerari/diskdiet/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/anggerari/diskdiet/ci.yml?branch=main&style=for-the-badge&label=CI"></a>
+  <a href="https://github.com/anggerari/diskdiet/releases"><img alt="Release" src="https://img.shields.io/github/v/release/anggerari/diskdiet?include_prereleases&style=for-the-badge&label=release&color=1f8a4c"></a>
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-d9a23a?style=for-the-badge">
+  <a href="https://github.com/anggerari/homebrew-diskdiet"><img alt="Homebrew" src="https://img.shields.io/badge/homebrew-anggerari%2Fdiskdiet-1f8a4c?style=for-the-badge&logo=homebrew&logoColor=white"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/macOS%20%7C%20Linux-555?style=for-the-badge">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-555?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <b>
+    <a href="#install">Install</a> ·
+    <a href="#why-diskdiet-exists">Why</a> ·
+    <a href="#desktop-app">Desktop app</a> ·
+    <a href="#cli">CLI</a> ·
+    <a href="#what-it-finds">What it finds</a> ·
+    <a href="#safety">Safety</a> ·
+    <a href="https://github.com/anggerari/diskdiet/releases">Download</a>
+  </b>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshot-light.png">
+    <img src="docs/screenshot.png" alt="diskdiet desktop app: projects, caches and Docker leftovers sorted by size" width="900">
+  </picture>
+</p>
 
 > **Beta.** diskdiet works and is tested, but it is still young. Read the list before you delete, and report anything odd in [Issues](https://github.com/anggerari/diskdiet/issues).
-
-![diskdiet desktop app](docs/screenshot.png)
 
 ## Why diskdiet exists
 
@@ -65,7 +96,23 @@ diskdiet-gui                 # open the app
 diskdiet-gui --scan ~/code   # open and start scanning right away
 ```
 
-It's a single native binary of a few megabytes, with no browser engine inside. It follows your system's light or dark theme and does everything the CLI does: pick categories, filter, select, show items in Finder, move to Trash or delete.
+It's a single native binary of a few megabytes, with no browser engine inside. It follows your system's light or dark theme.
+
+- **Everything on one screen**, grouped into Projects, Caches, Docker and Big files, with collapsible groups and counts in the sidebar.
+- **Filter pills** by ecosystem (Node, Rust, Flutter, Python…), **search** by name or path, and **sort** by size, name or last touched.
+- **Every row tells you why**: ecosystem badge, project name, full path, and status pills such as `uncommitted`, `merged worktree`, `may hold data` or `smart prune`.
+- **Storage card**: live free space, plus how much you'll have *after* cleanup as you select.
+- **Clean everything selected**, or a single item from its row. Reveal anything in Finder first.
+- **Stats** (all-time space freed, with history) and **Settings** (folders via the native picker, toggles, save as defaults).
+
+| Shortcut | Action |
+|---|---|
+| `⌘F` | Search |
+| `⌘R` | Rescan |
+| `⌘A` | Select / unselect everything visible |
+| `⌘⌫` | Clean up the selection |
+| `⌘1` … `⌘7` | Switch views |
+| `Esc` | Clear search / close dialog |
 
 ## CLI
 
