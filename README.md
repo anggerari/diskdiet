@@ -40,12 +40,13 @@ Everything in the project and cache categories can be regenerated (`npm install`
 curl -fsSL https://raw.githubusercontent.com/anggerari/diskdiet/main/install.sh | sh
 ```
 
-This installs `diskdiet` (CLI) and `diskdiet-gui` (desktop app) into `~/.local/bin`. Each release also includes a `diskdiet.app` zip for macOS. The app is not notarized yet, so the first time, right-click it and choose **Open**.
+This installs `diskdiet` (CLI) and `diskdiet-gui` (desktop app) into `~/.local/bin`. Each release also includes a `diskdiet.app` zip for macOS. The app is not notarized yet, so if you download it by hand, right-click it and choose **Open** the first time. The Homebrew cask handles this for you.
 
-**Homebrew** (once the tap is published):
+**Homebrew** (macOS and Linux):
 
 ```sh
-brew install anggerari/tap/diskdiet
+brew install anggerari/diskdiet/diskdiet           # CLI (also includes diskdiet-gui)
+brew install --cask anggerari/diskdiet/diskdiet    # desktop app → /Applications (macOS)
 ```
 
 **From source** (Rust toolchain from [rustup.rs](https://rustup.rs)):

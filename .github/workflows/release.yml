@@ -94,20 +94,21 @@ jobs:
       TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - name: Update Homebrew tap
+      - name: Update Homebrew tap (anggerari/homebrew-diskdiet)
         run: |
           if [ -z "$TAP_TOKEN" ]; then
             echo "HOMEBREW_TAP_TOKEN not set; skipping tap update."
             exit 0
           fi
           mkdir sums
-          gh release download "$TAG" --pattern '*.tar.gz.sha256' --dir sums
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/anggerari/homebrew-tap.git" tap
-          mkdir -p tap/Formula
+          gh release download "$TAG" --pattern '*.sha256' --dir sums
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/anggerari/homebrew-diskdiet.git" tap
+          mkdir -p tap/Formula tap/Casks
           scripts/homebrew-formula.sh "$TAG" sums > tap/Formula/diskdiet.rb
+          scripts/homebrew-cask.sh "$TAG" sums > tap/Casks/diskdiet.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/diskdiet.rb
+          git add Formula/diskdiet.rb Casks/diskdiet.rb
           git commit -m "diskdiet ${TAG}" || exit 0
           git push
