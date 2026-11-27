@@ -16,7 +16,12 @@ esac
 
 TAG="${DISKDIET_VERSION:-}"
 if [ -z "$TAG" ]; then
-  TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" | grep -m1 '"tag_name"' | cut -d'"' -f4)
+  # The releases feed lists prereleases too and isn't subject to the
+  # GitHub API's anonymous rate limit.
+  TAG=$(curl -fsSL "https://github.com/$REPO/releases.atom" | grep -m1 -o 'releases/tag/[^"<]*' | sed 's#releases/tag/##') || true
+fi
+if [ -z "$TAG" ]; then
+  TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1" | grep -m1 '"tag_name"' | cut -d'"' -f4) || true
 fi
 [ -n "$TAG" ] || { echo "diskdiet: could not find a release" >&2; exit 1; }
 
@@ -25,7 +30,7 @@ URL="https://github.com/$REPO/releases/download/$TAG/$FILE"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-echo "Downloading diskdiet $TAG for $TARGET…"
+echo "Downloading diskdiet $TAG for ${TARGET}..."
 curl -fsSL "$URL" -o "$TMP/$FILE"
 curl -fsSL "$URL.sha256" -o "$TMP/$FILE.sha256"
 
