@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use console::{style, Term};
 
-use crate::util::human_bytes;
+use diskdiet::util::human_bytes;
 
 pub struct Row {
     pub kind: String,
@@ -18,6 +18,7 @@ pub struct Row {
     pub size: u64,
     pub size_label: String,
     pub label: String,
+    pub note: Option<String>,
     pub selected: bool,
 }
 
@@ -76,11 +77,12 @@ fn render(rows: &[Row], error: Option<&str>) -> Vec<String> {
             size
         };
         lines.push(format!(
-            "  {:>num_w$}  {mark}  {:<kind_w$}  {:>5}  {size}  {}",
+            "  {:>num_w$}  {mark}  {:<kind_w$}  {:>5}  {size}  {}{}",
             i + 1,
             r.kind,
             style(&r.age).dim(),
-            r.label
+            r.label,
+            note(r)
         ));
     }
     let (n, bytes) = rows
@@ -98,6 +100,15 @@ fn render(rows: &[Row], error: Option<&str>) -> Vec<String> {
         lines.push(format!("  {}", style(e).red()));
     }
     lines
+}
+
+/// Render a row's note: warnings in yellow, hints dimmed.
+pub fn note(r: &Row) -> String {
+    match &r.note {
+        Some(n) if n.contains('⚠') => format!("  {}", style(n).yellow()),
+        Some(n) => format!("  {}", style(n).dim()),
+        None => String::new(),
+    }
 }
 
 /// Run the picker. Returns `None` if the user quit.

@@ -93,18 +93,79 @@ pub fn dir_size(path: &Path) -> u64 {
         .sum()
 }
 
-/// Free space available on the filesystem containing `path`.
-pub fn free_space(path: &Path) -> Option<u64> {
+/// `(total, free)` bytes of the filesystem containing `path`.
+pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     let out = Command::new("df").arg("-Pk").arg(path).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
-    let line = s.lines().nth(1)?;
-    let kb: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
-    Some(kb * 1024)
+    let mut cols = s.lines().nth(1)?.split_whitespace().skip(1);
+    let total: u64 = cols.next()?.parse().ok()?;
+    let free: u64 = cols.nth(1)?.parse().ok()?;
+    Some((total * 1024, free * 1024))
+}
+
+/// Free space available on the filesystem containing `path`.
+pub fn free_space(path: &Path) -> Option<u64> {
+    disk_space(path).map(|(_, free)| free)
+}
+
+/// Expand a leading `~` to the home directory.
+pub fn expand_tilde(p: &str, home: &Path) -> std::path::PathBuf {
+    if p == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = p.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        std::path::PathBuf::from(p)
+    }
+}
+
+/// Seconds since the Unix epoch.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// GUI apps and background services start with a minimal PATH. Add the usual
+/// places where docker, git, brew, pnpm and friends live.
+pub fn augment_path() {
+    let home = dirs::home_dir().unwrap_or_default();
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<std::path::PathBuf> = std::env::split_paths(&current).collect();
+    let extra = [
+        std::path::PathBuf::from("/opt/homebrew/bin"),
+        std::path::PathBuf::from("/usr/local/bin"),
+        std::path::PathBuf::from("/Applications/Docker.app/Contents/Resources/bin"),
+        home.join(".cargo/bin"),
+        home.join(".local/bin"),
+        home.join("Library/pnpm"),
+        home.join(".local/share/pnpm"),
+        home.join(".bun/bin"),
+        std::path::PathBuf::from("/usr/bin"),
+        std::path::PathBuf::from("/bin"),
+    ];
+    for p in extra {
+        if p.is_dir() && !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
+/// True when `cmd` can be found on PATH.
+pub fn has_command(cmd: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join(cmd).is_file()))
+        .unwrap_or(false)
 }
 
 /// Replace the home directory prefix with `~` for display.
 pub fn pretty_path(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
         Ok(rest) => format!("~/{}", rest.display()),
         Err(_) => path.display().to_string(),
     }
