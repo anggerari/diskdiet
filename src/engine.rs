@@ -381,6 +381,8 @@ pub struct Outcome {
     pub trashed: u64,
     pub removed: usize,
     pub errors: Vec<String>,
+    /// Things worth knowing that aren't failures (e.g. a fallback was used).
+    pub notes: Vec<String>,
 }
 
 fn run_tool(cmd: &[&str]) -> Result<(), String> {
@@ -414,11 +416,12 @@ pub fn delete(
         .partition(|i| !matches!(i.what, What::Docker(_)));
 
     // Trashing goes through the OS one call at a time, so keep it sequential.
+    let notes = std::sync::Mutex::new(Vec::new());
     let mut errors: Vec<String> = if opts.trash {
         fs_items
             .iter()
             .filter_map(|item| {
-                let res = delete_fs(item, home, opts, &freed, &trashed);
+                let res = delete_fs(item, home, opts, &freed, &trashed, &notes);
                 tick();
                 res.err()
             })
@@ -427,7 +430,7 @@ pub fn delete(
         fs_items
             .par_iter()
             .filter_map(|item| {
-                let res = delete_fs(item, home, opts, &freed, &trashed);
+                let res = delete_fs(item, home, opts, &freed, &trashed, &notes);
                 tick();
                 res.err()
             })
@@ -456,6 +459,7 @@ pub fn delete(
         trashed: trashed.into_inner(),
         removed: total - errors.len(),
         errors,
+        notes: notes.into_inner().unwrap_or_default(),
     }
 }
 
@@ -465,6 +469,7 @@ fn delete_fs(
     opts: DeleteOptions,
     freed: &AtomicU64,
     trashed: &AtomicU64,
+    notes: &std::sync::Mutex<Vec<String>>,
 ) -> Result<(), String> {
     let pp = |p: &Path| pretty_path(p, home);
     match &item.what {
@@ -485,10 +490,21 @@ fn delete_fs(
         }
         What::Cache { def, paths } => {
             if let Some(cmd) = def.smart.filter(|c| opts.smart_caches && has_command(c[0])) {
-                run_tool(cmd).map_err(|e| format!("{}: {e}", def.name))?;
-                let after: u64 = paths.iter().map(|p| dir_size(p)).sum();
-                freed.fetch_add(item.size.saturating_sub(after), Ordering::Relaxed);
-                return Ok(());
+                match run_tool(cmd) {
+                    Ok(()) => {
+                        let after: u64 = paths.iter().map(|p| dir_size(p)).sum();
+                        freed.fetch_add(item.size.saturating_sub(after), Ordering::Relaxed);
+                        return Ok(());
+                    }
+                    // The tool couldn't run (e.g. pnpm without node on PATH):
+                    // clear the cache the regular way instead of giving up.
+                    Err(e) => notes.lock().unwrap().push(format!(
+                        "{}: `{}` didn't work ({}), so the cache was cleared directly instead",
+                        def.name,
+                        cmd.join(" "),
+                        e.lines().next().unwrap_or("unknown error").trim()
+                    )),
+                }
             }
             for p in paths {
                 if opts.trash && def.name != "Trash" {
