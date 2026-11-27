@@ -103,16 +103,20 @@ pub fn is_artifact_name(name: &str) -> bool {
 pub struct CacheDef {
     pub name: &'static str,
     pub paths: &'static [&'static str],
+    /// A command that prunes only stale entries, used instead of wiping when available.
+    pub smart: Option<&'static [&'static str]>,
 }
 
 pub const CACHES: &[CacheDef] = &[
     CacheDef {
         name: "npm cache",
         paths: &[".npm/_cacache"],
+        smart: None,
     },
     CacheDef {
         name: "Yarn cache",
         paths: &["Library/Caches/Yarn", ".cache/yarn", ".yarn/berry/cache"],
+        smart: None,
     },
     CacheDef {
         name: "pnpm store",
@@ -121,14 +125,17 @@ pub const CACHES: &[CacheDef] = &[
             ".local/share/pnpm/store",
             ".pnpm-store",
         ],
+        smart: Some(&["pnpm", "store", "prune"]),
     },
     CacheDef {
         name: "Bun cache",
         paths: &[".bun/install/cache"],
+        smart: None,
     },
     CacheDef {
         name: "node-gyp",
         paths: &["Library/Caches/node-gyp", ".cache/node-gyp"],
+        smart: None,
     },
     CacheDef {
         name: "Cargo registry",
@@ -137,69 +144,86 @@ pub const CACHES: &[CacheDef] = &[
             ".cargo/registry/src",
             ".cargo/git/checkouts",
         ],
+        smart: None,
     },
     CacheDef {
         name: "pip cache",
         paths: &["Library/Caches/pip", ".cache/pip"],
+        smart: None,
     },
     CacheDef {
         name: "uv cache",
         paths: &["Library/Caches/uv", ".cache/uv"],
+        smart: Some(&["uv", "cache", "prune"]),
     },
     CacheDef {
         name: "Go build cache",
         paths: &["Library/Caches/go-build", ".cache/go-build"],
+        smart: None,
     },
     CacheDef {
         name: "Gradle caches",
         paths: &[".gradle/caches"],
+        smart: None,
     },
     CacheDef {
         name: "Maven repository",
         paths: &[".m2/repository"],
+        smart: None,
     },
     CacheDef {
         name: "Composer cache",
         paths: &["Library/Caches/composer", ".cache/composer"],
+        smart: None,
     },
     CacheDef {
         name: "Xcode DerivedData",
         paths: &["Library/Developer/Xcode/DerivedData"],
+        smart: None,
     },
     CacheDef {
         name: "Xcode device support",
         paths: &["Library/Developer/Xcode/iOS DeviceSupport"],
+        smart: None,
     },
     CacheDef {
         name: "Simulator caches",
         paths: &["Library/Developer/CoreSimulator/Caches"],
+        smart: None,
     },
     CacheDef {
         name: "CocoaPods cache",
         paths: &["Library/Caches/CocoaPods"],
+        smart: None,
     },
     CacheDef {
         name: "Homebrew cache",
         paths: &["Library/Caches/Homebrew", ".cache/Homebrew"],
+        smart: Some(&["brew", "cleanup", "--prune=all"]),
     },
     CacheDef {
         name: "Playwright browsers",
         paths: &["Library/Caches/ms-playwright", ".cache/ms-playwright"],
+        smart: None,
     },
     CacheDef {
         name: "Puppeteer browsers",
         paths: &[".cache/puppeteer"],
+        smart: None,
     },
     CacheDef {
         name: "Electron cache",
         paths: &["Library/Caches/electron", ".cache/electron"],
+        smart: None,
     },
     CacheDef {
         name: "JetBrains caches",
         paths: &["Library/Caches/JetBrains", ".cache/JetBrains"],
+        smart: None,
     },
     CacheDef {
         name: "Trash",
         paths: &[".Trash", ".local/share/Trash"],
+        smart: None,
     },
 ];

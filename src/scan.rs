@@ -3,31 +3,41 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use indicatif::ProgressBar;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-use crate::targets::{is_artifact_name, ArtifactRule, CACHES, RULES};
+use crate::config::CustomRule;
+use crate::targets::{is_artifact_name, CacheDef, CACHES, RULES};
 use crate::util::dir_size;
 
 pub struct Artifact {
     pub path: PathBuf,
-    pub kind: &'static str,
+    pub kind: String,
     pub size: u64,
     /// Most recent modification time of the owning project (excluding artifacts).
     pub last_modified: Option<SystemTime>,
 }
 
 pub struct Cache {
-    pub name: &'static str,
+    pub def: &'static CacheDef,
     pub paths: Vec<PathBuf>,
     pub size: u64,
 }
 
-fn match_rule(name: &str, parent: &Path) -> Option<&'static ArtifactRule> {
-    RULES
+fn match_rule(name: &str, parent: &Path, custom: &[CustomRule]) -> Option<String> {
+    if let Some(r) = RULES
         .iter()
         .find(|r| r.dir == name && r.marker.matches(parent))
+    {
+        return Some(r.kind.to_string());
+    }
+    custom
+        .iter()
+        .find(|r| {
+            r.dir == name
+                && (r.markers.is_empty() || r.markers.iter().any(|m| parent.join(m).exists()))
+        })
+        .map(|r| r.kind.clone())
 }
 
 fn should_skip(name: &str, path: &Path, home: &Path) -> bool {
@@ -40,8 +50,9 @@ fn should_skip(name: &str, path: &Path, home: &Path) -> bool {
 pub fn find_artifacts(
     roots: &[PathBuf],
     home: &Path,
-    pb: &ProgressBar,
-) -> Vec<(PathBuf, &'static str)> {
+    custom: &[CustomRule],
+    progress: &(dyn Fn(&str) + Sync),
+) -> Vec<(PathBuf, String)> {
     let mut found = Vec::new();
     let mut visited: u64 = 0;
     for root in roots {
@@ -53,7 +64,7 @@ pub fn find_artifacts(
             }
             visited += 1;
             if visited.is_multiple_of(500) {
-                pb.set_message(format!(
+                progress(&format!(
                     "Scanning… {visited} folders, {} found",
                     found.len()
                 ));
@@ -61,8 +72,8 @@ pub fn find_artifacts(
             let name = entry.file_name().to_string_lossy();
             let path = entry.path();
             if let Some(parent) = path.parent() {
-                if let Some(rule) = match_rule(&name, parent) {
-                    found.push((path.to_path_buf(), rule.kind));
+                if let Some(kind) = match_rule(&name, parent, custom) {
+                    found.push((path.to_path_buf(), kind));
                     it.skip_current_dir();
                     continue;
                 }
@@ -87,7 +98,7 @@ fn project_mtime(project: &Path) -> Option<SystemTime> {
 }
 
 /// Measure sizes in parallel.
-pub fn measure(found: Vec<(PathBuf, &'static str)>) -> Vec<Artifact> {
+pub fn measure(found: Vec<(PathBuf, String)>) -> Vec<Artifact> {
     found
         .into_par_iter()
         .map(|(path, kind)| Artifact {
@@ -99,9 +110,10 @@ pub fn measure(found: Vec<(PathBuf, &'static str)>) -> Vec<Artifact> {
         .collect()
 }
 
-pub fn find_caches(home: &Path) -> Vec<Cache> {
+pub fn find_caches(home: &Path, skip: &[String]) -> Vec<Cache> {
     CACHES
         .par_iter()
+        .filter(|def| !skip.iter().any(|s| s.eq_ignore_ascii_case(def.name)))
         .filter_map(|def| {
             let paths: Vec<PathBuf> = def
                 .paths
@@ -113,11 +125,7 @@ pub fn find_caches(home: &Path) -> Vec<Cache> {
                 return None;
             }
             let size = paths.iter().map(|p| dir_size(p)).sum();
-            Some(Cache {
-                name: def.name,
-                paths,
-                size,
-            })
+            Some(Cache { def, paths, size })
         })
         .collect()
 }
@@ -166,21 +174,31 @@ mod tests {
         fs::create_dir_all(root.join("docs/build")).unwrap();
         // A `target` folder without Cargo.toml: keep it
         fs::create_dir_all(root.join("misc/target")).unwrap();
+        // Custom rule: vite `dist`
+        fs::create_dir_all(root.join("site/dist")).unwrap();
+        fs::write(root.join("site/vite.config.ts"), "").unwrap();
 
+        let custom = vec![CustomRule {
+            dir: "dist".into(),
+            markers: vec!["vite.config.ts".into()],
+            kind: "Vite".into(),
+        }];
         let found = find_artifacts(
             std::slice::from_ref(&root),
             Path::new("/nonexistent"),
-            &ProgressBar::hidden(),
+            &custom,
+            &|_| {},
         );
         let mut names: Vec<_> = found
             .iter()
-            .map(|(p, k)| (p.strip_prefix(&root).unwrap().to_path_buf(), *k))
+            .map(|(p, k)| (p.strip_prefix(&root).unwrap().to_path_buf(), k.as_str()))
             .collect();
         names.sort();
         assert_eq!(
             names,
             vec![
                 (PathBuf::from("crab/target"), "Rust"),
+                (PathBuf::from("site/dist"), "Vite"),
                 (PathBuf::from("web/node_modules"), "Node"),
             ]
         );

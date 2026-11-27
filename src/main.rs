@@ -1,28 +1,24 @@
-mod docker;
 mod picker;
-mod scan;
-mod service;
-mod targets;
-mod util;
+mod tui;
 
-use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
 
-use util::{free_space, human_bytes, parse_duration, parse_size, pretty_path};
+use diskdiet::config::{self, Config};
+use diskdiet::engine::{self, AutoPolicy, DeleteOptions, Item, Options};
+use diskdiet::util::{free_space, human_bytes, now_secs, parse_duration, parse_size};
+use diskdiet::{alert, docker, service, stats};
 
-/// Put your disk on a diet 🍔➡️🥗
+/// Put your storage on a diet 🍔➡️🥗 (beta)
 ///
-/// Finds and removes node_modules, build artifacts, package-manager caches
-/// and Docker leftovers.
+/// Finds and removes node_modules, build artifacts, package-manager caches,
+/// Docker leftovers and big forgotten files.
 #[derive(Parser)]
 #[command(name = "diskdiet", version, about, long_about)]
 struct Cli {
@@ -33,11 +29,58 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Show what can be cleaned (read-only)
-    Scan(Filters),
+    Scan {
+        #[command(flatten)]
+        filters: Filters,
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Pick what to delete and delete it
-    Clean(CleanArgs),
-    /// Show Docker disk usage and prune it
-    Docker(DockerArgs),
+    Clean {
+        #[command(flatten)]
+        filters: Filters,
+        #[command(flatten)]
+        clean: CleanFlags,
+    },
+    /// Find big forgotten files (installers, archives, videos, iOS backups)
+    Big {
+        /// Folders to search [default: Downloads, Desktop, Documents, Movies]
+        paths: Vec<PathBuf>,
+        /// Only files at least this big [default: 500MB]
+        #[arg(long, value_parser = parse_size)]
+        min_size: Option<u64>,
+        #[command(flatten)]
+        clean: CleanFlags,
+    },
+    /// Pick Docker images / containers / volumes to remove, or bulk-prune
+    Docker {
+        /// Skip the picker and bulk-prune like `docker system prune`
+        #[arg(long)]
+        prune: bool,
+        #[command(flatten)]
+        clean: CleanFlags,
+    },
+    /// Notify when free space drops below a threshold
+    Alert {
+        /// Threshold, e.g. 20GB
+        #[arg(long, default_value = "20GB", value_parser = parse_size)]
+        below: u64,
+        /// Print only; don't show a desktop notification
+        #[arg(long)]
+        no_notify: bool,
+    },
+    /// Show how much space diskdiet has freed so far
+    Stats {
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage ~/.config/diskdiet/config.toml
+    Config {
+        #[command(subcommand)]
+        action: ConfigCmd,
+    },
     /// Run diskdiet automatically in the background (launchd / systemd)
     Service {
         #[command(subcommand)]
@@ -47,14 +90,14 @@ enum Cmd {
 
 #[derive(Args, Clone)]
 struct Filters {
-    /// Folders to search for project artifacts [default: current folder]
+    /// Folders to search for project artifacts [default: config `paths`, else current folder]
     paths: Vec<PathBuf>,
     /// Only include projects untouched for at least this long (e.g. 30d, 2w)
     #[arg(long, value_parser = parse_duration)]
     older_than: Option<Duration>,
-    /// Ignore anything smaller than this (e.g. 50MB)
-    #[arg(long, value_parser = parse_size, default_value = "1MB")]
-    min_size: u64,
+    /// Ignore anything smaller than this (e.g. 50MB) [default: 1MB]
+    #[arg(long, value_parser = parse_size)]
+    min_size: Option<u64>,
     /// Skip project folders (node_modules, target, ...)
     #[arg(long)]
     no_projects: bool,
@@ -64,52 +107,56 @@ struct Filters {
     /// Skip Docker
     #[arg(long)]
     no_docker: bool,
+    /// Also look for big files in Downloads, Desktop, Documents and Movies
+    #[arg(long)]
+    big: bool,
+    /// Don't check git status of projects
+    #[arg(long)]
+    no_git: bool,
 }
 
-#[derive(Args)]
-struct CleanArgs {
-    #[command(flatten)]
-    filters: Filters,
-    /// Don't ask: delete everything found (used by the background service)
+#[derive(Args, Clone, Default)]
+struct CleanFlags {
+    /// Don't ask: delete everything that is safe to delete automatically
     #[arg(short, long)]
     yes: bool,
-    /// Only show what would be deleted
+    /// Only show what `--yes` would delete
     #[arg(long)]
     dry_run: bool,
-    /// Docker: also remove all unused images (not just dangling) and all build cache
+    /// Move to Trash instead of deleting permanently
+    #[arg(long)]
+    trash: bool,
+    /// Full-screen picker (arrow keys + space)
+    #[arg(long)]
+    tui: bool,
+    /// Wipe caches even when a smarter prune command exists
+    #[arg(long)]
+    wipe_caches: bool,
+    /// Docker (with --yes): also remove tagged images no container uses
     #[arg(long)]
     docker_all: bool,
-    /// Docker: also remove unused volumes (may delete database data!)
+    /// Docker (with --yes): also remove unused volumes (may delete database data!)
     #[arg(long)]
     docker_volumes: bool,
 }
 
-#[derive(Args)]
-struct DockerArgs {
-    /// Skip the picker and bulk-prune like `docker system prune`
-    #[arg(long)]
-    prune: bool,
-    /// With --prune/--yes: also remove all unused images (not just dangling) and all build cache
-    #[arg(long)]
-    all: bool,
-    /// Also remove unused volumes (may delete database data!)
-    #[arg(long)]
-    volumes: bool,
-    /// Don't ask for confirmation
-    #[arg(short, long)]
-    yes: bool,
-    /// Only show what would be deleted
-    #[arg(long)]
-    dry_run: bool,
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Create a commented config file
+    Init,
+    /// Print the config file location
+    Path,
+    /// Print the current config file
+    Show,
 }
 
 #[derive(Subcommand)]
 enum ServiceCmd {
-    /// Install a scheduled job that cleans old project artifacts and caches
+    /// Install scheduled jobs: periodic cleanup and (optionally) a low-space alert
     Install {
         /// Folders to search [default: your home folder]
         paths: Vec<PathBuf>,
-        /// How often to run
+        /// How often to clean
         #[arg(long, default_value = "7d", value_parser = parse_duration)]
         every: Duration,
         /// Only clean projects untouched for this long
@@ -121,98 +168,27 @@ enum ServiceCmd {
         /// Leave global caches alone
         #[arg(long)]
         no_caches: bool,
+        /// Move to Trash instead of deleting
+        #[arg(long)]
+        trash: bool,
+        /// Also notify when free space drops below this (e.g. 20GB)
+        #[arg(long)]
+        alert_below: Option<String>,
+        /// How often to check free space
+        #[arg(long, default_value = "1h", value_parser = parse_duration)]
+        alert_every: Duration,
     },
-    /// Remove the scheduled job
+    /// Remove the scheduled jobs
     Uninstall,
-    /// Show whether the scheduled job is installed
+    /// Show whether the scheduled jobs are installed
     Status,
 }
 
-enum What {
-    Artifact {
-        path: PathBuf,
-        kind: &'static str,
-        modified: Option<SystemTime>,
-    },
-    Cache {
-        name: &'static str,
-        paths: Vec<PathBuf>,
-    },
-    Docker(docker::Obj),
+fn home() -> Result<PathBuf> {
+    dirs::home_dir().context("could not determine home directory")
 }
 
-struct Item {
-    what: What,
-    size: u64,
-}
-
-impl Item {
-    fn default_selected(&self) -> bool {
-        match &self.what {
-            // Docker prune and emptying the Trash are opt-in.
-            What::Docker(o) => o.default_selected(),
-            What::Cache { name, .. } => *name != "Trash",
-            What::Artifact { .. } => true,
-        }
-    }
-
-    /// What `clean --yes` removes.
-    fn auto_selected(&self, a: &CleanArgs) -> bool {
-        match &self.what {
-            What::Docker(o) => o.auto_selected(a.docker_all, a.docker_volumes),
-            _ => true,
-        }
-    }
-
-    fn row(&self, home: &Path) -> picker::Row {
-        let (kind, age, label) = match &self.what {
-            What::Artifact {
-                path,
-                kind,
-                modified,
-            } => (kind.to_string(), age(*modified), pretty_path(path, home)),
-            What::Cache { name, paths } => (
-                "cache".into(),
-                "-".into(),
-                format!(
-                    "{name} {}",
-                    style(
-                        paths
-                            .iter()
-                            .map(|p| pretty_path(p, home))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                    .dim()
-                ),
-            ),
-            What::Docker(o) => (o.kind_label().into(), o.age.clone(), o.label.clone()),
-        };
-        let size_label = human_bytes(self.size);
-        picker::Row {
-            kind,
-            age,
-            size: self.size,
-            size_label,
-            label,
-            selected: self.default_selected(),
-        }
-    }
-}
-
-fn age(t: Option<SystemTime>) -> String {
-    let Some(d) = t.and_then(|t| t.elapsed().ok()) else {
-        return "?".into();
-    };
-    let days = d.as_secs() / 86_400;
-    match days {
-        0 => "today".into(),
-        d if d < 365 => format!("{d}d"),
-        d => format!("{}y", d / 365),
-    }
-}
-
-fn spinner(msg: &str) -> ProgressBar {
+fn spinner() -> ProgressBar {
     let pb = if io::stderr().is_terminal() {
         ProgressBar::new_spinner()
     } else {
@@ -220,93 +196,76 @@ fn spinner(msg: &str) -> ProgressBar {
     };
     pb.set_style(ProgressStyle::with_template("{spinner:.cyan} {msg}").unwrap());
     pb.enable_steady_tick(Duration::from_millis(80));
-    pb.set_message(msg.to_string());
+    pb.set_message("Scanning…");
     pb
 }
 
-fn home() -> Result<PathBuf> {
-    dirs::home_dir().context("could not determine home directory")
+impl Filters {
+    fn options(&self, cfg: &Config, home: &Path) -> Result<Options> {
+        let mut o = Options::from_config(cfg, home);
+        if !self.paths.is_empty() {
+            o.paths = self.paths.clone();
+        }
+        if o.paths.is_empty() {
+            o.paths = vec![std::env::current_dir()?];
+        }
+        for p in &o.paths {
+            if !p.exists() {
+                bail!("path not found: {}", p.display());
+            }
+        }
+        if self.older_than.is_some() {
+            o.older_than = self.older_than;
+        }
+        if let Some(m) = self.min_size {
+            o.min_size = m;
+        }
+        o.projects = !self.no_projects;
+        o.caches = !self.no_caches;
+        o.docker = !self.no_docker;
+        o.big = self.big;
+        o.git = !self.no_git;
+        Ok(o)
+    }
 }
 
-fn gather(f: &Filters, home: &Path) -> Result<Vec<Item>> {
-    let pb = spinner("Scanning…");
-    let mut items = Vec::new();
-
-    if !f.no_projects {
-        let roots: Vec<PathBuf> = if f.paths.is_empty() {
-            vec![std::env::current_dir()?]
-        } else {
-            f.paths
-                .iter()
-                .map(|p| {
-                    p.canonicalize()
-                        .with_context(|| format!("path not found: {}", p.display()))
-                })
-                .collect::<Result<_>>()?
-        };
-        let found = scan::find_artifacts(&roots, home, &pb);
-        pb.set_message(format!("Measuring {} folders…", found.len()));
-        for a in scan::measure(found) {
-            if let Some(min_age) = f.older_than {
-                let old_enough = a
-                    .last_modified
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|e| e >= min_age);
-                if !old_enough {
-                    continue;
-                }
-            }
-            items.push(Item {
-                size: a.size,
-                what: What::Artifact {
-                    path: a.path,
-                    kind: a.kind,
-                    modified: a.last_modified,
-                },
-            });
-        }
-    }
-
-    if !f.no_caches {
-        pb.set_message("Measuring caches…");
-        for c in scan::find_caches(home) {
-            items.push(Item {
-                size: c.size,
-                what: What::Cache {
-                    name: c.name,
-                    paths: c.paths,
-                },
-            });
-        }
-    }
-
-    if !f.no_docker {
-        pb.set_message("Asking Docker…");
-        if docker::available() {
-            match docker::scan() {
-                Ok(objs) => items.extend(objs.into_iter().map(|o| Item {
-                    size: o.size,
-                    what: What::Docker(o),
-                })),
-                Err(e) => eprintln!("  {} {e:#}", style("warning:").yellow()),
-            }
-        }
-    }
+fn gather(opts: &Options, cfg: &Config, home: &Path) -> Vec<Item> {
+    let pb = spinner();
+    let scan = engine::gather(opts, cfg, home, &|m| pb.set_message(m.to_string()));
     pb.finish_and_clear();
+    for w in scan.warnings {
+        eprintln!("  {} {w}", style("warning:").yellow());
+    }
+    scan.items
+}
 
-    // Stopped containers are tiny but block image removal, so always show them.
-    items.retain(|i| {
-        i.size >= f.min_size
-            || matches!(&i.what, What::Docker(o) if o.kind == docker::Kind::Container)
-    });
-    items.sort_by_key(|i| std::cmp::Reverse(i.size));
-    Ok(items)
+fn smart(cfg: &Config, flags: &CleanFlags) -> bool {
+    !flags.wipe_caches && cfg.smart_caches.unwrap_or(true)
+}
+
+fn rows(items: &[Item], home: &Path, smart: bool) -> Vec<picker::Row> {
+    items
+        .iter()
+        .map(|i| picker::Row {
+            kind: i.kind_label(),
+            age: i.age_label(),
+            size: i.size,
+            size_label: human_bytes(i.size),
+            label: i.label(home),
+            note: i.note(smart),
+            selected: i.default_selected(),
+        })
+        .collect()
 }
 
 fn header(title: &str, home: &Path, items: &[Item]) {
     let total: u64 = items.iter().map(|i| i.size).sum();
     println!();
-    println!("{}", style(format!("diskdiet {title}")).bold());
+    println!(
+        "{} {}",
+        style(format!("diskdiet {title}")).bold(),
+        style(" beta ").black().on_yellow()
+    );
     let free = free_space(home)
         .map(human_bytes)
         .unwrap_or_else(|| "?".into());
@@ -322,32 +281,55 @@ fn header(title: &str, home: &Path, items: &[Item]) {
     println!();
 }
 
-fn cmd_scan(f: Filters) -> Result<()> {
-    let home = home()?;
-    let items = gather(&f, &home)?;
-    header("scan", &home, &items);
-    if items.is_empty() {
-        println!("Nothing to clean. Your disk is already lean 🥗");
-        return Ok(());
-    }
-    let mut rows: Vec<_> = items.iter().map(|i| i.row(&home)).collect();
-    rows.iter_mut().for_each(|r| r.selected = false);
+fn print_list(rows: &[picker::Row], only_selected: bool) {
     for (i, r) in rows.iter().enumerate() {
+        if only_selected && !r.selected {
+            continue;
+        }
         println!(
-            "  {:>3}  {:<12} {:>6}  {:>9}  {}",
+            "  {:>3}  {:<13} {:>6}  {:>10}  {}{}",
             i + 1,
             r.kind,
             r.age,
             r.size_label,
-            r.label
+            r.label,
+            picker::note(r)
         );
     }
+}
+
+fn cmd_scan(filters: Filters, json: bool) -> Result<()> {
+    let home = home()?;
+    let cfg = Config::load(&home)?;
+    let opts = filters.options(&cfg, &home)?;
+    let items = gather(&opts, &cfg, &home);
+    let smart = cfg.smart_caches.unwrap_or(true);
+    if json {
+        let out = serde_json::json!({
+            "version": diskdiet::VERSION,
+            "free_space": free_space(&home),
+            "reclaimable": items.iter().map(|i| i.size).sum::<u64>(),
+            "items": items.iter().map(|i| i.to_json(&home, smart)).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    header("scan", &home, &items);
+    if items.is_empty() {
+        println!("Nothing to clean. Your storage is already lean 🥗");
+        return Ok(());
+    }
+    print_list(&rows(&items, &home, smart), false);
     println!();
     println!(
         "Run {} to choose what to delete.",
         style("diskdiet clean").cyan()
     );
-    if !f.no_docker && items.iter().any(|i| matches!(i.what, What::Docker(_))) {
+    if opts.docker
+        && items
+            .iter()
+            .any(|i| i.category() == engine::Category::Docker)
+    {
         if let Ok(rows) = docker::usage() {
             println!();
             println!("{}", style("Docker summary").bold());
@@ -373,49 +355,54 @@ fn confirm(prompt: &str) -> Result<bool> {
     ))
 }
 
-fn cmd_clean(a: CleanArgs) -> Result<()> {
-    let home = home()?;
-    let started = SystemTime::now();
-    if a.yes {
-        let ts = started
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        println!("diskdiet clean run (unix time {ts})");
+fn run_clean(title: &str, opts: Options, cfg: &Config, home: &Path, f: CleanFlags) -> Result<()> {
+    let started = Instant::now();
+    if f.yes {
+        println!(
+            "diskdiet {} run at unix time {}",
+            diskdiet::VERSION,
+            now_secs()
+        );
     }
-    let items = gather(&a.filters, &home)?;
-    header("clean", &home, &items);
+    let smart = smart(cfg, &f);
+    let trash = f.trash || cfg.trash;
+    let items = gather(&opts, cfg, home);
+    header(title, home, &items);
     if items.is_empty() {
-        println!("Nothing to clean. Your disk is already lean 🥗");
+        println!("Nothing to clean. Your storage is already lean 🥗");
         return Ok(());
     }
 
-    let mut rows: Vec<_> = items.iter().map(|i| i.row(&home)).collect();
-    let selected: Vec<&Item> = if a.yes || a.dry_run {
+    let policy = AutoPolicy {
+        docker_all: f.docker_all,
+        docker_volumes: f.docker_volumes,
+    };
+    let mut rows = rows(&items, home, smart);
+    let chosen: Vec<&Item> = if f.yes || f.dry_run {
         for (row, item) in rows.iter_mut().zip(&items) {
-            row.selected = item.auto_selected(&a);
+            row.selected = item.auto_selected(policy);
         }
-        for (i, r) in rows.iter().enumerate().filter(|(_, r)| r.selected) {
-            println!(
-                "  {:>3}  {:<12} {:>6}  {:>9}  {}",
-                i + 1,
-                r.kind,
-                r.age,
-                r.size_label,
-                r.label
-            );
+        print_list(&rows, true);
+        if !rows.iter().any(|r| r.selected) {
+            println!("  Nothing here is removed automatically (big files, Trash, risky Docker items and dirty projects always need you to pick them).");
         }
         println!();
-        if a.dry_run {
+        if f.dry_run {
             println!("Dry run: nothing was deleted.");
             return Ok(());
         }
-        items.iter().filter(|i| i.auto_selected(&a)).collect()
+        items.iter().filter(|i| i.auto_selected(policy)).collect()
     } else {
         if !io::stdin().is_terminal() {
             bail!("not running in a terminal; pass --yes to clean without asking or --dry-run to preview");
         }
-        if picker::pick(&mut rows)?.is_none() {
+        let use_tui = f.tui || cfg.picker.as_deref() == Some("tui");
+        let picked = if use_tui {
+            tui::pick(&mut rows, &format!("diskdiet {title} (beta)"))?
+        } else {
+            picker::pick(&mut rows)?
+        };
+        if picked.is_none() {
             println!("Cancelled. Nothing was deleted.");
             return Ok(());
         }
@@ -431,8 +418,9 @@ fn cmd_clean(a: CleanArgs) -> Result<()> {
         }
         let bytes: u64 = chosen.iter().map(|i| i.size).sum();
         println!();
+        let verb = if trash { "Move to Trash" } else { "Delete" };
         if !confirm(&format!(
-            "Delete {} item(s), ~{}?",
+            "{verb} {} item(s), ~{}?",
             chosen.len(),
             human_bytes(bytes)
         ))? {
@@ -442,137 +430,220 @@ fn cmd_clean(a: CleanArgs) -> Result<()> {
         chosen
     };
 
-    let before = free_space(&home);
-    let (fs_items, mut docker_selected): (Vec<&Item>, Vec<&Item>) = selected
-        .into_iter()
-        .partition(|i| !matches!(i.what, What::Docker(_)));
-
+    let before = free_space(home);
     let pb = if io::stderr().is_terminal() {
-        ProgressBar::new(fs_items.len() as u64)
+        ProgressBar::new(chosen.len() as u64)
     } else {
         ProgressBar::hidden()
     };
-    pb.set_style(ProgressStyle::with_template("  {bar:30.green/dim} {pos}/{len} {msg}").unwrap());
-    let freed = AtomicU64::new(0);
-    let errors: Vec<String> = fs_items
-        .par_iter()
-        .filter_map(|item| {
-            let res = match &item.what {
-                What::Artifact { path, .. } => fs::remove_dir_all(path)
-                    .map_err(|e| format!("{}: {e}", pretty_path(path, &home))),
-                What::Cache { paths, name } => paths
-                    .iter()
-                    .map(|p| {
-                        scan::clear_dir_contents(p)
-                            .map_err(|e| format!("{name} ({}): {e}", pretty_path(p, &home)))
-                    })
-                    .find(|r| r.is_err())
-                    .unwrap_or(Ok(())),
-                What::Docker(_) => Ok(()),
-            };
-            pb.inc(1);
-            match res {
-                Ok(()) => {
-                    freed.fetch_add(item.size, Ordering::Relaxed);
-                    None
-                }
-                Err(e) => Some(e),
-            }
-        })
-        .collect();
+    pb.set_style(ProgressStyle::with_template("  {bar:30.green/dim} {pos}/{len}").unwrap());
+    let outcome = engine::delete(
+        &chosen,
+        home,
+        DeleteOptions {
+            trash,
+            smart_caches: smart,
+        },
+        &|done, _| pb.set_position(done as u64),
+    );
     pb.finish_and_clear();
 
-    for e in &errors {
+    for e in &outcome.errors {
         eprintln!("  {} {e}", style("warning:").yellow());
     }
-
-    // Docker: containers first, then images, volumes, build cache.
-    docker_selected.sort_by_key(|i| match &i.what {
-        What::Docker(o) => o.kind,
-        _ => docker::Kind::BuildCache,
-    });
-    for item in docker_selected {
-        let What::Docker(o) = &item.what else {
-            continue;
-        };
-        match o.delete() {
-            Ok(()) => {
-                freed.fetch_add(item.size, Ordering::Relaxed);
-            }
-            Err(e) => eprintln!("  {} {}: {e:#}", style("warning:").yellow(), o.label),
-        }
-    }
+    let _ = stats::record(
+        outcome.freed,
+        outcome.trashed,
+        outcome.removed as u64,
+        if f.yes { "auto" } else { "cli" },
+    );
 
     println!();
     println!(
         "  {} freed ~{}",
         style("Done!").green().bold(),
-        style(human_bytes(freed.into_inner())).bold()
+        style(human_bytes(outcome.freed)).bold()
     );
-    if let (Some(b), Some(after)) = (before, free_space(&home)) {
+    if outcome.trashed > 0 {
+        println!(
+            "  Moved ~{} to the Trash. Empty the Trash to get that space back.",
+            human_bytes(outcome.trashed)
+        );
+    }
+    if let (Some(b), Some(after)) = (before, free_space(home)) {
         println!(
             "  Free space: {} → {}",
             human_bytes(b),
             style(human_bytes(after)).green().bold()
         );
     }
-    if a.yes {
-        if let Ok(d) = started.elapsed() {
-            println!("  Took {:.1}s", d.as_secs_f64());
-        }
+    let all_time = stats::load().total_freed;
+    if all_time > 0 {
+        println!(
+            "  {}",
+            style(format!(
+                "All-time freed with diskdiet: {}",
+                human_bytes(all_time)
+            ))
+            .dim()
+        );
+    }
+    if f.yes {
+        println!("  Took {:.1}s", started.elapsed().as_secs_f64());
     }
     Ok(())
 }
 
-fn cmd_docker(a: DockerArgs) -> Result<()> {
+fn only(opts: &mut Options, projects: bool, caches: bool, docker: bool, big: bool) {
+    opts.projects = projects;
+    opts.caches = caches;
+    opts.docker = docker;
+    opts.big = big;
+}
+
+fn cmd_clean(filters: Filters, f: CleanFlags) -> Result<()> {
+    let home = home()?;
+    let cfg = Config::load(&home)?;
+    let opts = filters.options(&cfg, &home)?;
+    run_clean("clean", opts, &cfg, &home, f)
+}
+
+fn cmd_big(paths: Vec<PathBuf>, min_size: Option<u64>, f: CleanFlags) -> Result<()> {
+    let home = home()?;
+    let cfg = Config::load(&home)?;
+    let mut opts = Options::from_config(&cfg, &home);
+    only(&mut opts, false, false, false, true);
+    if !paths.is_empty() {
+        opts.big_paths = paths;
+    }
+    if let Some(m) = min_size {
+        opts.big_min_size = m;
+    }
+    run_clean("big files", opts, &cfg, &home, f)
+}
+
+fn cmd_docker(prune: bool, f: CleanFlags) -> Result<()> {
     if !docker::available() {
         bail!("Docker is not running (or the docker CLI is not installed)");
     }
-    if !a.prune {
-        // Itemized: every image, stopped container, unused volume and build cache.
-        return cmd_clean(CleanArgs {
-            filters: Filters {
-                paths: vec![],
-                older_than: None,
-                min_size: 0,
-                no_projects: true,
-                no_caches: true,
-                no_docker: false,
-            },
-            yes: a.yes,
-            dry_run: a.dry_run,
-            docker_all: a.all,
-            docker_volumes: a.volumes,
-        });
+    let home = home()?;
+    let cfg = Config::load(&home)?;
+    if !prune {
+        let mut opts = Options::from_config(&cfg, &home);
+        only(&mut opts, false, false, true, false);
+        opts.min_size = 0;
+        return run_clean("docker", opts, &cfg, &home, f);
     }
-    let rows = docker::usage()?;
     println!();
     println!("{}", style("Docker disk usage").bold());
-    for r in &rows {
+    for r in docker::usage()? {
         println!(
             "  {:<15} {:>10}  reclaimable {}",
             r.kind, r.size, r.reclaimable
         );
     }
     println!();
-    let what = match (a.all, a.volumes) {
-        (false, false) => "stopped containers, dangling images, unused networks, dangling build cache",
-        (true, false) => "stopped containers, ALL unused images, unused networks, ALL build cache",
-        (false, true) => "stopped containers, dangling images, unused networks, dangling build cache, UNUSED VOLUMES",
-        (true, true) => "stopped containers, ALL unused images, unused networks, ALL build cache, UNUSED VOLUMES",
-    };
-    println!("  Will remove: {what}");
-    if !a.yes && !confirm("Continue?")? {
+    let mut what = vec!["stopped containers", "unused networks"];
+    what.push(if f.docker_all {
+        "ALL unused images, ALL build cache"
+    } else {
+        "dangling images, dangling build cache"
+    });
+    if f.docker_volumes {
+        what.push("UNUSED VOLUMES");
+    }
+    println!("  Will remove: {}", what.join(", "));
+    if !f.yes && !confirm("Continue?")? {
         println!("Cancelled.");
         return Ok(());
     }
-    docker::prune(a.all, a.volumes)?;
+    docker::prune(f.docker_all, f.docker_volumes)?;
     if cfg!(target_os = "macos") {
         println!();
         println!(
             "{}",
             style("Tip: Docker Desktop's disk image may take a moment to shrink. If it doesn't, use Docker Desktop → Troubleshoot → Clean / Purge data.").dim()
         );
+    }
+    Ok(())
+}
+
+fn cmd_alert(below: u64, no_notify: bool) -> Result<()> {
+    let home = home()?;
+    match alert::check(&home, below, !no_notify)? {
+        alert::Check::Ok(free) => println!(
+            "OK: {} free (alert below {}).",
+            human_bytes(free),
+            human_bytes(below)
+        ),
+        alert::Check::Low(free) => println!(
+            "LOW: only {} free (alert below {}).",
+            human_bytes(free),
+            human_bytes(below)
+        ),
+    }
+    Ok(())
+}
+
+fn cmd_stats(json: bool) -> Result<()> {
+    let s = stats::load();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&s)?);
+        return Ok(());
+    }
+    println!();
+    println!("{}", style("diskdiet stats").bold());
+    println!(
+        "  Freed:   {}",
+        style(human_bytes(s.total_freed)).green().bold()
+    );
+    if s.total_trashed > 0 {
+        println!("  Trashed: {}", human_bytes(s.total_trashed));
+    }
+    println!("  Items:   {}", s.items_removed);
+    println!("  Runs:    {}", s.runs);
+    if !s.history.is_empty() {
+        println!();
+        println!("  {}", style("Recent runs").dim());
+        let now = now_secs();
+        for r in s.history.iter().rev().take(10) {
+            let ago = now.saturating_sub(r.at) / 86_400;
+            println!(
+                "  {:>4}d ago  {:>10}  {:>4} item(s)  via {}",
+                ago,
+                human_bytes(r.freed + r.trashed),
+                r.items,
+                r.source
+            );
+        }
+    }
+    if let Some(p) = stats::path() {
+        println!();
+        println!("  {}", style(p.display()).dim());
+    }
+    Ok(())
+}
+
+fn cmd_config(action: ConfigCmd) -> Result<()> {
+    let home = home()?;
+    match action {
+        ConfigCmd::Init => {
+            let p = Config::init(&home)?;
+            println!("Created {}", p.display());
+        }
+        ConfigCmd::Path => println!("{}", config::path(&home).display()),
+        ConfigCmd::Show => {
+            let p = config::path(&home);
+            if p.exists() {
+                Config::load(&home)?; // validate
+                print!("{}", std::fs::read_to_string(&p)?);
+            } else {
+                println!(
+                    "No config yet. Run `diskdiet config init` to create {}",
+                    p.display()
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -586,6 +657,9 @@ fn cmd_service(action: ServiceCmd) -> Result<()> {
             older_than,
             with_docker,
             no_caches,
+            trash,
+            alert_below,
+            alert_every,
         } => {
             parse_duration(&older_than).map_err(anyhow::Error::msg)?;
             let paths = if paths.is_empty() {
@@ -605,13 +679,35 @@ fn cmd_service(action: ServiceCmd) -> Result<()> {
             if no_caches {
                 args.push("--no-caches".into());
             }
+            if trash {
+                args.push("--trash".into());
+            }
             for p in paths {
                 let p = p
                     .canonicalize()
                     .with_context(|| format!("path not found: {}", p.display()))?;
                 args.push(p.to_string_lossy().into_owned());
             }
-            service::install(&home, &service::ServiceConfig { every, args })
+            service::install(
+                &home,
+                &service::Job {
+                    name: "clean",
+                    every,
+                    args,
+                },
+            )?;
+            if let Some(below) = alert_below {
+                parse_size(&below).map_err(anyhow::Error::msg)?;
+                service::install(
+                    &home,
+                    &service::Job {
+                        name: "alert",
+                        every: alert_every,
+                        args: vec!["alert".into(), "--below".into(), below],
+                    },
+                )?;
+            }
+            Ok(())
         }
         ServiceCmd::Uninstall => service::uninstall(&home),
         ServiceCmd::Status => service::status(&home),
@@ -619,11 +715,20 @@ fn cmd_service(action: ServiceCmd) -> Result<()> {
 }
 
 fn main() {
+    diskdiet::util::augment_path();
     let cli = Cli::parse();
     let res = match cli.cmd {
-        Cmd::Scan(f) => cmd_scan(f),
-        Cmd::Clean(a) => cmd_clean(a),
-        Cmd::Docker(a) => cmd_docker(a),
+        Cmd::Scan { filters, json } => cmd_scan(filters, json),
+        Cmd::Clean { filters, clean } => cmd_clean(filters, clean),
+        Cmd::Big {
+            paths,
+            min_size,
+            clean,
+        } => cmd_big(paths, min_size, clean),
+        Cmd::Docker { prune, clean } => cmd_docker(prune, clean),
+        Cmd::Alert { below, no_notify } => cmd_alert(below, no_notify),
+        Cmd::Stats { json } => cmd_stats(json),
+        Cmd::Config { action } => cmd_config(action),
         Cmd::Service { action } => cmd_service(action),
     };
     if let Err(e) = res {
