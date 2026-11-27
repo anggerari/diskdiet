@@ -1,0 +1,19 @@
+name: PR title
+
+# PRs are squash-merged, so the PR title becomes the commit message that
+# release-please reads. Keep it in Conventional Commits form, e.g.
+# "feat: add desktop app" or "fix(docker): skip running containers".
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
