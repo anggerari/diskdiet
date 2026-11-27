@@ -26,4 +26,4 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
       - name: Shell scripts parse
-        run: sh -n install.sh && sh -n scripts/bundle-macos.sh && sh -n scripts/homebrew-formula.sh
+        run: sh -n install.sh && sh -n scripts/bundle-macos.sh && sh -n scripts/homebrew-formula.sh && sh -n scripts/homebrew-cask.sh
