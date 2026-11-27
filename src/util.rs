@@ -145,6 +145,10 @@ pub fn augment_path() {
         std::path::PathBuf::from("/usr/bin"),
         std::path::PathBuf::from("/bin"),
     ];
+    // Tools like pnpm are Node scripts (`#!/usr/bin/env node`); apps opened
+    // from Finder don't see the node that a version manager put on the
+    // terminal's PATH.
+    let extra = extra.into_iter().chain(node_bin_dirs(&home));
     for p in extra {
         if p.is_dir() && !paths.contains(&p) {
             paths.push(p);
@@ -153,6 +157,57 @@ pub fn augment_path() {
     if let Ok(joined) = std::env::join_paths(paths) {
         std::env::set_var("PATH", joined);
     }
+}
+
+/// `bin` folders where Node.js version managers keep `node`.
+pub fn node_bin_dirs(home: &Path) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = nvm_default_bin(home).into_iter().collect();
+    for p in [
+        ".volta/bin",
+        ".asdf/shims",
+        ".local/share/mise/shims",
+        "Library/Application Support/fnm/aliases/default/bin",
+        ".local/share/fnm/aliases/default/bin",
+        ".fnm/aliases/default/bin",
+    ] {
+        out.push(home.join(p));
+    }
+    out
+}
+
+fn version_key(v: &str) -> Vec<u64> {
+    v.trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
+}
+
+/// The `bin` folder of nvm's default Node version (`~/.nvm/alias/default`),
+/// or of the newest installed version when the alias can't be resolved.
+pub fn nvm_default_bin(home: &Path) -> Option<std::path::PathBuf> {
+    let nvm = std::env::var_os("NVM_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".nvm"));
+    let versions = nvm.join("versions/node");
+    let mut all: Vec<String> = std::fs::read_dir(&versions)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().join("bin/node").exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    all.sort_by_key(|v| version_key(v));
+    let alias = std::fs::read_to_string(nvm.join("alias/default")).unwrap_or_default();
+    let alias = alias.trim().trim_start_matches('v');
+    let pinned = alias.starts_with(|c: char| c.is_ascii_digit());
+    let pick = all
+        .iter()
+        .rev()
+        .find(|v| {
+            let v = v.trim_start_matches('v');
+            pinned && (v == alias || v.starts_with(&format!("{alias}.")))
+        })
+        .or(all.last())?;
+    Some(versions.join(pick).join("bin"))
 }
 
 /// True when `cmd` can be found on PATH.
@@ -195,6 +250,31 @@ mod tests {
         assert_eq!(parse_size("1KB").unwrap(), 1024);
         assert_eq!(parse_size("1.5g").unwrap(), 1_610_612_736);
         assert!(parse_size("1XB").is_err());
+    }
+
+    #[test]
+    fn nvm_default_version() {
+        let home = std::env::temp_dir().join(format!("diskdiet-nvm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        for v in ["v18.20.1", "v22.9.0", "v22.22.2", "v23.1.0"] {
+            let bin = home.join(".nvm/versions/node").join(v).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join("node"), "").unwrap();
+        }
+        std::env::remove_var("NVM_DIR");
+        // No alias: newest version.
+        assert!(nvm_default_bin(&home).unwrap().ends_with("v23.1.0/bin"));
+        std::fs::create_dir_all(home.join(".nvm/alias")).unwrap();
+        // Major-only alias picks the newest 22.x.
+        std::fs::write(home.join(".nvm/alias/default"), "22\n").unwrap();
+        assert!(nvm_default_bin(&home).unwrap().ends_with("v22.22.2/bin"));
+        // Exact alias.
+        std::fs::write(home.join(".nvm/alias/default"), "v18.20.1").unwrap();
+        assert!(nvm_default_bin(&home).unwrap().ends_with("v18.20.1/bin"));
+        // Named alias falls back to newest.
+        std::fs::write(home.join(".nvm/alias/default"), "lts/iron").unwrap();
+        assert!(nvm_default_bin(&home).unwrap().ends_with("v23.1.0/bin"));
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

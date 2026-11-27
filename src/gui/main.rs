@@ -742,6 +742,7 @@ impl App {
                     human_bytes(o.trashed)
                 ));
             }
+            body.extend(o.notes.iter().cloned());
             let freed = human_bytes(o.freed + o.trashed);
             self.toast = Some(Toast {
                 ok: o.errors.is_empty(),

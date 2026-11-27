@@ -451,6 +451,9 @@ fn run_clean(title: &str, opts: Options, cfg: &Config, home: &Path, f: CleanFlag
     for e in &outcome.errors {
         eprintln!("  {} {e}", style("warning:").yellow());
     }
+    for n in &outcome.notes {
+        println!("  {} {n}", style("note:").cyan());
+    }
     let _ = stats::record(
         outcome.freed,
         outcome.trashed,
