@@ -72,7 +72,7 @@ jobs:
           tar -C "$OUT/$NAME" -czf "$OUT/$NAME.tar.gz" .
           if [ "${{ runner.os }}" = "macOS" ]; then
             scripts/bundle-macos.sh "$BIN/diskdiet-gui" "$OUT" "${TAG#v}"
-            (cd "$OUT" && ditto -c -k --keepParent diskdiet.app "diskdiet-app-${TAG}-${{ matrix.target }}.zip")
+            (cd "$OUT" && ditto -c -k --keepParent "Disk Diet.app" "diskdiet-app-${TAG}-${{ matrix.target }}.zip")
           fi
           cd "$OUT"
           for f in *.tar.gz *.zip; do

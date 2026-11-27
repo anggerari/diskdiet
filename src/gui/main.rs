@@ -1,4 +1,4 @@
-//! diskdiet desktop app (beta).
+//! Disk Diet desktop app (beta).
 //!
 //! A native window on top of the same engine as the CLI. Design rules: look
 //! like a system utility; neutral colors that follow the OS theme; color only
@@ -41,13 +41,18 @@ fn main() -> eframe::Result {
     diskdiet::util::augment_path();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("diskdiet")
+            .with_title("Disk Diet")
+            .with_app_id("diskdiet")
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
+                    .unwrap_or_default(),
+            )
             .with_inner_size([1120.0, 720.0])
             .with_min_inner_size([860.0, 520.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "diskdiet",
+        "Disk Diet",
         options,
         Box::new(|cc| {
             let mut app = App::new(&cc.egui_ctx);
@@ -178,6 +183,8 @@ struct App {
     // view state
     view: View,
     kind_filter: Option<String>,
+    /// Show only selected items that carry a warning.
+    review_only: bool,
     search: String,
     focus_search: bool,
     sort: (SortKey, bool),
@@ -600,6 +607,7 @@ impl App {
             warnings: Vec::new(),
             view: View::Cleanup(None),
             kind_filter: None,
+            review_only: false,
             search: String::new(),
             focus_search: false,
             sort: (SortKey::Size, true),
@@ -777,6 +785,7 @@ impl App {
                     .is_none_or(|k| &self.rows[i].kind == k)
             })
             .filter(|&i| q.is_empty() || self.rows[i].haystack.contains(&q))
+            .filter(|&i| !self.review_only || self.rows[i].warn)
             .collect();
         let (key, desc) = self.sort;
         v.sort_by(|&a, &b| {
@@ -796,7 +805,8 @@ impl App {
     }
 
     fn lines(&self, visible: &[usize]) -> Vec<Line> {
-        let grouped = self.view == View::Cleanup(None)
+        let grouped = !self.review_only
+            && self.view == View::Cleanup(None)
             && self.search.trim().is_empty()
             && self.kind_filter.is_none();
         if !grouped {
@@ -854,7 +864,7 @@ impl App {
     }
 
     fn snapshot_tick(&mut self, ctx: &egui::Context) {
-        if !self.scanned || self.phase != Phase::Idle {
+        if !self.scanned || self.phase == Phase::Scanning {
             return;
         }
         let Some((path, frames)) = self.snapshot.as_mut() else {
@@ -868,6 +878,11 @@ impl App {
                 Ok("settings") => self.view = View::Settings,
                 Ok("stats") => self.view = View::Stats,
                 Ok("projects") => self.view = View::Cleanup(Some(Category::Project)),
+                Ok("review") => self.review_only = true,
+                Ok("progress") => {
+                    self.phase = Phase::Deleting;
+                    self.shared.lock().unwrap().progress = (5, 23);
+                }
                 _ => {}
             }
             if std::env::var("DISKDIET_SNAPSHOT_THEME").as_deref() == Ok("light") {
@@ -1003,7 +1018,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::hover());
                     icons::mark(ui.painter(), r, p.accent, p.panel);
-                    ui.label(RichText::new("diskdiet").size(16.0).strong().color(p.text));
+                    ui.label(RichText::new("Disk Diet").size(16.0).strong().color(p.text));
                     let g = ui.painter().layout_no_wrap(
                         "BETA".into(),
                         FontId::proportional(9.5),
@@ -1105,6 +1120,7 @@ impl App {
         if resp.clicked() {
             self.view = view;
             self.kind_filter = None;
+            self.review_only = false;
         }
     }
 
@@ -1176,7 +1192,7 @@ impl App {
             if self.stats.total_freed > 0 {
                 ui.label(
                     RichText::new(format!(
-                        "{} freed with diskdiet so far",
+                        "{} freed with Disk Diet so far",
                         human_bytes(self.stats.total_freed)
                     ))
                     .size(11.0)
@@ -1363,8 +1379,49 @@ impl App {
                 }
                 resp.clicked()
             };
-            if pill_btn(ui, "All", total, self.kind_filter.is_none()) {
+            let mut clear_review = false;
+            if self.review_only {
+                let n = visible.len();
+                let g = ui.painter().layout_no_wrap(
+                    format!("Needs a look  {n}"),
+                    FontId::proportional(12.0),
+                    p.warn,
+                );
+                let (r, resp) =
+                    ui.allocate_exact_size(g.size() + Vec2::new(40.0, 10.0), Sense::click());
+                ui.painter()
+                    .rect_filled(r, r.height() / 2.0, p.warn.gamma_multiply(0.14));
+                ui.painter().rect_stroke(
+                    r,
+                    r.height() / 2.0,
+                    Stroke::new(1.0, p.warn.gamma_multiply(0.7)),
+                    StrokeKind::Inside,
+                );
+                let text_pos = r.left_center() + Vec2::new(10.0, -g.size().y / 2.0);
+                ui.painter().galley(text_pos, g, p.warn);
+                let x = Rect::from_center_size(
+                    r.right_center() - Vec2::new(14.0, 0.0),
+                    Vec2::splat(12.0),
+                );
+                icons::paint(ui.painter(), x, Icon::Close, p.warn);
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if resp.on_hover_text("Show everything again").clicked() {
+                    clear_review = true;
+                }
+            }
+            if pill_btn(
+                ui,
+                "All",
+                total,
+                self.kind_filter.is_none() && !self.review_only,
+            ) {
                 clicked = Some(None);
+                clear_review = true;
+            }
+            if clear_review {
+                self.review_only = false;
             }
             for (k, (n, _)) in &kinds {
                 if pill_btn(ui, k, *n, self.kind_filter.as_deref() == Some(k.as_str())) {
@@ -1386,6 +1443,9 @@ impl App {
             });
         });
         if let Some(c) = clicked {
+            if c.is_some() {
+                self.review_only = false;
+            }
             self.kind_filter = c;
         }
         if let Some(on) = select {
@@ -1771,12 +1831,30 @@ impl App {
                     let bytes: u64 = sel.iter().map(|&i| self.rows[i].size).sum();
                     if self.phase == Phase::Deleting {
                         let (d, t) = self.shared.lock().unwrap().progress;
-                        ui.add(egui::Spinner::new().size(14.0).color(p.accent));
-                        ui.label(RichText::new(format!("Cleaning up… {d} of {t}")).color(p.text));
-                        ui.add(
-                            egui::ProgressBar::new(d as f32 / t.max(1) as f32)
-                                .desired_width(200.0)
-                                .fill(p.accent),
+                        let target = d as f32 / t.max(1) as f32;
+                        let frac = ui.ctx().animate_value_with_time(
+                            egui::Id::unique("clean-progress"),
+                            target,
+                            0.25,
+                        );
+                        ui.label(
+                            RichText::new(format!("Cleaning up… {d} of {t}"))
+                                .strong()
+                                .color(p.text),
+                        );
+                        ui.add_space(4.0);
+                        // Slim track with a filled part that never collapses into a blob.
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(240.0, 6.0), Sense::hover());
+                        ui.painter().rect_filled(r, 3.0, p.border);
+                        if frac > 0.0 {
+                            let mut f = r;
+                            f.set_width((r.width() * frac).max(6.0));
+                            ui.painter().rect_filled(f, 3.0, p.accent);
+                        }
+                        ui.label(
+                            RichText::new(format!("{:.0}%", target * 100.0))
+                                .monospace()
+                                .color(p.dim),
                         );
                     } else if sel.is_empty() {
                         ui.label(
@@ -1794,17 +1872,35 @@ impl App {
                         let warn = sel.iter().filter(|&&i| self.rows[i].warn).count();
                         if warn > 0 {
                             ui.add_space(6.0);
-                            icons::icon(ui, Icon::Warning, 14.0, p.warn);
-                            ui.label(
-                                RichText::new(format!("{warn} need a second look"))
-                                    .size(12.0)
-                                    .color(p.warn),
-                            );
+                            let resp = ui
+                                .horizontal(|ui| {
+                                    icons::icon(ui, Icon::Warning, 14.0, p.warn);
+                                    ui.label(
+                                        RichText::new(format!("{warn} need a second look"))
+                                            .size(12.0)
+                                            .color(p.warn)
+                                            .underline(),
+                                    );
+                                })
+                                .response
+                                .interact(Sense::click())
+                                .on_hover_text("Show only these items");
+                            if resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if resp.clicked() {
+                                self.review_only = true;
+                                self.view = View::Cleanup(None);
+                                self.kind_filter = None;
+                                self.search.clear();
+                            }
                         }
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let idle = self.phase == Phase::Idle;
-                        let label = if sel.is_empty() {
+                        let label = if self.phase == Phase::Deleting {
+                            "Cleaning up…".to_string()
+                        } else if sel.is_empty() {
                             "Clean up".to_string()
                         } else if self.trash {
                             format!("Move {} to Trash", human_bytes(bytes))
@@ -1956,7 +2052,7 @@ impl App {
         let s = &self.stats;
         ui.label(RichText::new("Stats").size(21.0).strong().color(p.text));
         ui.label(
-            RichText::new("Everything diskdiet has cleaned on this computer: CLI, app and background service.")
+            RichText::new("Everything Disk Diet has cleaned on this computer: CLI, app and background service.")
                 .size(12.0)
                 .color(p.dim),
         );
@@ -2335,7 +2431,7 @@ impl App {
             ui.add_space(16.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("diskdiet {VERSION} (beta)"))
+                    RichText::new(format!("Disk Diet {VERSION} (beta)"))
                         .size(12.0)
                         .color(p.faint),
                 );

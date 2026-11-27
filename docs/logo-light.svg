@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="400" height="104" viewBox="0 0 400 104" fill="none" role="img" aria-label="diskdiet">
-  <!-- Your storage as a donut chart, with the slice diskdiet gives back pulled out. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="104" viewBox="0 0 440 104" fill="none" role="img" aria-label="Disk Diet">
+  <!-- Your storage as a donut chart, with the slice Disk Diet gives back pulled out. -->
   <path d="M83.72 37.21A35 35 0 1 1 37.21 20.28" stroke="#1F8A4C" stroke-width="18"/>
   <path d="M45.34 11.61A35 35 0 0 1 83.06 25.35" stroke="#1F8A4C" stroke-opacity="0.45" stroke-width="18"/>
-  <text x="118" y="71" fill="#1F2328" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-1.5">diskdiet</text>
+  <text x="118" y="71" fill="#1F2328" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-1">Disk Diet</text>
 </svg>

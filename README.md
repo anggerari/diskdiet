@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
-    <img src="docs/logo-light.svg" alt="diskdiet" width="340">
+    <img src="docs/logo-light.svg" alt="Disk Diet" width="360">
   </picture>
 </p>
 
@@ -9,7 +9,7 @@
 
 <p align="center">
   You build fast with AI. Your storage fills up just as fast.<br>
-  diskdiet finds the <code>node_modules</code>, build folders, package caches and Docker leftovers eating your storage,<br>
+  Disk Diet finds the <code>node_modules</code>, build folders, package caches and Docker leftovers eating your storage,<br>
   shows you what each one costs, and lets you pick what goes. CLI + a small native desktop app, written in Rust.
 </p>
 
@@ -71,13 +71,13 @@ Everything in the project and cache categories can be regenerated (`npm install`
 curl -fsSL https://raw.githubusercontent.com/anggerari/diskdiet/main/install.sh | sh
 ```
 
-This installs `diskdiet` (CLI) and `diskdiet-gui` (desktop app) into `~/.local/bin`. Each release also includes a `diskdiet.app` zip for macOS. The app is not notarized yet, so if you download it by hand, right-click it and choose **Open** the first time. The Homebrew cask handles this for you.
+This installs `diskdiet` (CLI) and `diskdiet-gui` (desktop app) into `~/.local/bin`. Each release also includes the **Disk Diet** app for macOS as a zip. The app is not notarized yet, so if you download it by hand, right-click it and choose **Open** the first time. The Homebrew cask handles this for you.
 
 **Homebrew** (macOS and Linux):
 
 ```sh
 brew install anggerari/diskdiet/diskdiet           # CLI (also includes diskdiet-gui)
-brew install --cask anggerari/diskdiet/diskdiet    # desktop app → /Applications (macOS)
+brew install --cask anggerari/diskdiet/diskdiet    # "Disk Diet" app → /Applications (macOS)
 ```
 
 **From source** (Rust toolchain from [rustup.rs](https://rustup.rs)):
@@ -86,10 +86,12 @@ brew install --cask anggerari/diskdiet/diskdiet    # desktop app → /Applicatio
 git clone https://github.com/anggerari/diskdiet && cd diskdiet
 make install        # CLI only
 make install-gui    # CLI + desktop app
-make app            # macOS: build dist/diskdiet.app
+make app            # macOS: build "dist/Disk Diet.app"
 ```
 
 ## Desktop app
+
+The app is called **Disk Diet**. Open it from Applications, Spotlight or Launchpad, or from a terminal:
 
 ```sh
 diskdiet-gui                 # open the app
