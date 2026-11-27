@@ -207,26 +207,43 @@ pub fn icon_button(
     resp
 }
 
-/// The app mark: a rounded "drive" with a belt cinched around its middle and
-/// two status lights.
-pub fn mark(painter: &Painter, rect: Rect, accent: Color32, belt: Color32) {
-    let r = rect.width() * 0.24;
-    painter.rect_filled(rect, r, accent);
-    let h = rect.height();
-    let band = Rect::from_min_max(
-        Pos2::new(rect.left(), rect.top() + h * 0.46),
-        Pos2::new(rect.right(), rect.top() + h * 0.58),
+/// The app mark: a storage drive with a pinched waist, cinched by a belt
+/// with a buckle. Drawn as two convex halves (top and bottom) with the belt
+/// gap between them. Coordinates follow the 104x104 logo SVG.
+pub fn mark(painter: &Painter, rect: Rect, accent: Color32, hole: Color32) {
+    let k = rect.width() / 104.0;
+    let p = |x: f32, y: f32| Pos2::new(rect.left() + x * k, rect.top() + y * k);
+    let quad = |pts: &mut Vec<Pos2>, a: (f32, f32), c: (f32, f32), b: (f32, f32)| {
+        for i in 0..=8 {
+            let t = i as f32 / 8.0;
+            let u = 1.0 - t;
+            pts.push(p(
+                u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
+                u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
+            ));
+        }
+    };
+    let mut top = vec![p(16.0, 47.0)];
+    quad(&mut top, (8.0, 28.0), (8.0, 8.0), (28.0, 8.0));
+    quad(&mut top, (76.0, 8.0), (96.0, 8.0), (96.0, 28.0));
+    top.push(p(88.0, 47.0));
+    painter.add(Shape::convex_polygon(top, accent, Stroke::NONE));
+
+    let mut bottom = vec![p(88.0, 57.0)];
+    quad(&mut bottom, (96.0, 76.0), (96.0, 96.0), (76.0, 96.0));
+    quad(&mut bottom, (28.0, 96.0), (8.0, 96.0), (8.0, 76.0));
+    bottom.push(p(16.0, 57.0));
+    painter.add(Shape::convex_polygon(bottom, accent, Stroke::NONE));
+
+    // Buckle
+    painter.rect_filled(
+        Rect::from_min_max(p(42.0, 44.0), p(62.0, 60.0)),
+        3.0 * k,
+        accent,
     );
-    painter.rect_filled(band, 0.0, belt);
-    let d = rect.width() * 0.075;
-    painter.circle_filled(
-        Pos2::new(rect.right() - rect.width() * 0.26, rect.top() + h * 0.26),
-        d,
-        belt,
-    );
-    painter.circle_filled(
-        Pos2::new(rect.right() - rect.width() * 0.46, rect.top() + h * 0.26),
-        d,
-        belt,
+    painter.rect_filled(
+        Rect::from_min_max(p(48.0, 49.0), p(56.0, 55.0)),
+        1.0 * k,
+        hole,
     );
 }

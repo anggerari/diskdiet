@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<h1 align="center">diskdiet: put your storage on a diet</h1>
+<h3 align="center">Put your storage on a diet.</h3>
 
 <p align="center">
   You build fast with AI. Your storage fills up just as fast.<br>
@@ -14,12 +14,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/anggerari/diskdiet/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/anggerari/diskdiet/ci.yml?branch=main&style=for-the-badge&label=CI"></a>
-  <a href="https://github.com/anggerari/diskdiet/releases"><img alt="Release" src="https://img.shields.io/github/v/release/anggerari/diskdiet?include_prereleases&style=for-the-badge&label=release&color=1f8a4c"></a>
-  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-d9a23a?style=for-the-badge">
-  <a href="https://github.com/anggerari/homebrew-diskdiet"><img alt="Homebrew" src="https://img.shields.io/badge/homebrew-anggerari%2Fdiskdiet-1f8a4c?style=for-the-badge&logo=homebrew&logoColor=white"></a>
-  <img alt="Platforms" src="https://img.shields.io/badge/macOS%20%7C%20Linux-555?style=for-the-badge">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-555?style=for-the-badge"></a>
+  <a href="https://github.com/anggerari/diskdiet/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/anggerari/diskdiet/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <a href="https://github.com/anggerari/diskdiet/releases"><img alt="Release" src="https://img.shields.io/github/v/release/anggerari/diskdiet?include_prereleases&style=flat-square&label=release&color=1f8a4c"></a>
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-d9a23a?style=flat-square">
+  <a href="https://github.com/anggerari/homebrew-diskdiet"><img alt="Homebrew" src="https://img.shields.io/badge/homebrew-anggerari%2Fdiskdiet-1f8a4c?style=flat-square&logo=homebrew&logoColor=white"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/macOS%20%7C%20Linux-555?style=flat-square">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-555?style=flat-square"></a>
 </p>
 
 <p align="center">
