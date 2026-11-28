@@ -17,6 +17,7 @@ use crate::git::{GitInfo, GitInspector};
 use crate::scan;
 use crate::targets::CacheDef;
 use crate::trashcan;
+use crate::undo;
 use crate::util::{dir_size, expand_tilde, has_command, pretty_path};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Hash)]
@@ -383,6 +384,8 @@ pub struct Outcome {
     pub errors: Vec<String>,
     /// Things worth knowing that aren't failures (e.g. a fallback was used).
     pub notes: Vec<String>,
+    /// What went to the Trash, for `undo::record`.
+    pub undo: Vec<undo::Batch>,
 }
 
 fn run_tool(cmd: &[&str]) -> Result<(), String> {
@@ -417,11 +420,20 @@ pub fn delete(
 
     // Trashing goes through the OS one call at a time, so keep it sequential.
     let notes = std::sync::Mutex::new(Vec::new());
+    let batches = std::sync::Mutex::new(Vec::new());
+    let ctx = Ctx {
+        home,
+        opts,
+        freed: &freed,
+        trashed: &trashed,
+        notes: &notes,
+        batches: &batches,
+    };
     let mut errors: Vec<String> = if opts.trash {
         fs_items
             .iter()
             .filter_map(|item| {
-                let res = delete_fs(item, home, opts, &freed, &trashed, &notes);
+                let res = delete_fs(item, &ctx);
                 tick();
                 res.err()
             })
@@ -430,7 +442,7 @@ pub fn delete(
         fs_items
             .par_iter()
             .filter_map(|item| {
-                let res = delete_fs(item, home, opts, &freed, &trashed, &notes);
+                let res = delete_fs(item, &ctx);
                 tick();
                 res.err()
             })
@@ -460,23 +472,49 @@ pub fn delete(
         removed: total - errors.len(),
         errors,
         notes: notes.into_inner().unwrap_or_default(),
+        undo: batches.into_inner().unwrap_or_default(),
     }
 }
 
-fn delete_fs(
-    item: &Item,
-    home: &Path,
+struct Ctx<'a> {
+    home: &'a Path,
     opts: DeleteOptions,
-    freed: &AtomicU64,
-    trashed: &AtomicU64,
-    notes: &std::sync::Mutex<Vec<String>>,
-) -> Result<(), String> {
+    freed: &'a AtomicU64,
+    trashed: &'a AtomicU64,
+    notes: &'a std::sync::Mutex<Vec<String>>,
+    batches: &'a std::sync::Mutex<Vec<undo::Batch>>,
+}
+
+impl Ctx<'_> {
+    fn remember(&self, item: &Item, trashed: Vec<trashcan::Trashed>) {
+        if trashed.is_empty() {
+            return;
+        }
+        self.batches.lock().unwrap().push(undo::Batch {
+            label: item.label(self.home),
+            size: item.size,
+            trashed,
+        });
+    }
+}
+
+fn delete_fs(item: &Item, ctx: &Ctx) -> Result<(), String> {
+    let Ctx {
+        home,
+        opts,
+        freed,
+        trashed,
+        notes,
+        ..
+    } = *ctx;
     let pp = |p: &Path| pretty_path(p, home);
     match &item.what {
         What::Artifact { path, .. } | What::Big { path, .. } => {
             if opts.trash {
-                trashcan::move_to_trash(std::slice::from_ref(path))
-                    .map_err(|e| format!("{}: {e:#}", pp(path)))?;
+                let mut t = Vec::new();
+                let res = trashcan::move_to_trash(std::slice::from_ref(path), &mut t);
+                ctx.remember(item, t);
+                res.map_err(|e| format!("{}: {e:#}", pp(path)))?;
                 trashed.fetch_add(item.size, Ordering::Relaxed);
             } else {
                 let res = if path.is_dir() {
@@ -506,15 +544,19 @@ fn delete_fs(
                     )),
                 }
             }
+            let mut moved = Vec::new();
             for p in paths {
                 if opts.trash && def.name != "Trash" {
-                    trashcan::trash_contents(p)
-                        .map_err(|e| format!("{} ({}): {e:#}", def.name, pp(p)))?;
+                    if let Err(e) = trashcan::trash_contents(p, &mut moved) {
+                        ctx.remember(item, moved);
+                        return Err(format!("{} ({}): {e:#}", def.name, pp(p)));
+                    }
                 } else {
                     scan::clear_dir_contents(p)
                         .map_err(|e| format!("{} ({}): {e}", def.name, pp(p)))?;
                 }
             }
+            ctx.remember(item, moved);
             if opts.trash && def.name != "Trash" {
                 trashed.fetch_add(item.size, Ordering::Relaxed);
             } else {

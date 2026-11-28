@@ -1109,6 +1109,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "indicatif",
+ "objc2-foundation 0.3.2",
  "ratatui",
  "rayon",
  "serde",

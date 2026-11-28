@@ -13,7 +13,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use diskdiet::config::{self, Config};
 use diskdiet::engine::{self, AutoPolicy, DeleteOptions, Item, Options};
 use diskdiet::util::{free_space, human_bytes, now_secs, parse_duration, parse_size};
-use diskdiet::{alert, docker, service, stats};
+use diskdiet::{alert, docker, service, stats, undo};
 
 /// Put your storage on a diet 🍔➡️🥗 (beta)
 ///
@@ -69,6 +69,18 @@ enum Cmd {
         /// Print only; don't show a desktop notification
         #[arg(long)]
         no_notify: bool,
+    },
+    /// Put back what the last clean moved to the Trash
+    Undo {
+        /// List recent cleans that can be undone
+        #[arg(long)]
+        list: bool,
+        /// Undo this clean instead of the last one (id from --list)
+        #[arg(long)]
+        id: Option<u64>,
+        /// Don't ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Show how much space diskdiet has freed so far
     Stats {
@@ -454,12 +466,20 @@ fn run_clean(title: &str, opts: Options, cfg: &Config, home: &Path, f: CleanFlag
     for n in &outcome.notes {
         println!("  {} {n}", style("note:").cyan());
     }
+    let source = if f.yes { "auto" } else { "cli" };
     let _ = stats::record(
         outcome.freed,
         outcome.trashed,
         outcome.removed as u64,
-        if f.yes { "auto" } else { "cli" },
+        source,
     );
+    let can_undo = !outcome.undo.is_empty();
+    if let Err(e) = undo::record(outcome.undo, source) {
+        eprintln!(
+            "  {} couldn't save undo info: {e:#}",
+            style("warning:").yellow()
+        );
+    }
 
     println!();
     println!(
@@ -472,6 +492,12 @@ fn run_clean(title: &str, opts: Options, cfg: &Config, home: &Path, f: CleanFlag
             "  Moved ~{} to the Trash. Empty the Trash to get that space back.",
             human_bytes(outcome.trashed)
         );
+        if can_undo {
+            println!(
+                "  Changed your mind? {} puts it all back.",
+                style("diskdiet undo").cyan()
+            );
+        }
     }
     if let (Some(b), Some(after)) = (before, free_space(home)) {
         println!(
@@ -585,6 +611,114 @@ fn cmd_alert(below: u64, no_notify: bool) -> Result<()> {
             human_bytes(below)
         ),
     }
+    Ok(())
+}
+
+fn ago(at: u64) -> String {
+    let s = now_secs().saturating_sub(at);
+    match s {
+        0..=59 => "just now".into(),
+        60..=3599 => format!("{}m ago", s / 60),
+        3600..=86_399 => format!("{}h ago", s / 3600),
+        _ => format!("{}d ago", s / 86_400),
+    }
+}
+
+fn cmd_undo(list: bool, id: Option<u64>, yes: bool) -> Result<()> {
+    let log = undo::load();
+    if list {
+        let cleans: Vec<_> = log.cleans.iter().rev().collect();
+        if cleans.is_empty() {
+            println!("Nothing to undo. Only cleans that used the Trash (--trash) can be undone.");
+            return Ok(());
+        }
+        println!();
+        println!(
+            "  {:<12} {:<10} {:>10}  {:>6}  via",
+            "id", "when", "size", "items"
+        );
+        for c in cleans {
+            let left = c.pending().count();
+            let status = if left == 0 {
+                style("restored or gone".to_string()).dim()
+            } else {
+                style(format!("{left}")).bold()
+            };
+            println!(
+                "  {:<12} {:<10} {:>10}  {:>6}  {}",
+                c.at,
+                ago(c.at),
+                if left == 0 {
+                    "-".to_string()
+                } else {
+                    human_bytes(c.pending_size())
+                },
+                status,
+                c.source
+            );
+        }
+        println!();
+        return Ok(());
+    }
+    let clean = match id {
+        Some(id) => log
+            .cleans
+            .into_iter()
+            .find(|c| c.at == id)
+            .with_context(|| format!("no clean with id {id} (see `diskdiet undo --list`)"))?,
+        None => match undo::last_restorable() {
+            Some(c) => c,
+            None => {
+                println!(
+                    "Nothing to undo. Only cleans that used the Trash (--trash) can be undone."
+                );
+                return Ok(());
+            }
+        },
+    };
+    if !clean.can_restore() {
+        println!("Everything from that clean is already back (or gone from the Trash).");
+        return Ok(());
+    }
+    let mut labels: Vec<&str> = clean.pending().map(|e| e.label.as_str()).collect();
+    labels.dedup();
+    println!();
+    println!(
+        "{} {}",
+        style("diskdiet undo").bold(),
+        style(format!("· clean from {}", ago(clean.at))).dim()
+    );
+    for l in &labels {
+        println!("  {l}");
+    }
+    println!();
+    if !yes {
+        if !io::stdin().is_terminal() {
+            bail!("not running in a terminal; pass --yes to restore without asking");
+        }
+        if !confirm(&format!(
+            "Put back {} item(s), ~{} from the Trash?",
+            labels.len(),
+            human_bytes(clean.pending_size())
+        ))? {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+    let out = undo::restore(clean.at, &|_, _| {})?;
+    for s in &out.skipped {
+        eprintln!("  {} couldn't restore {s}", style("warning:").yellow());
+    }
+    println!(
+        "  {} put back {} path(s){}",
+        style("Done!").green().bold(),
+        out.restored,
+        if out.bytes > 0 {
+            format!(", ~{}", human_bytes(out.bytes))
+        } else {
+            String::new()
+        }
+    );
     Ok(())
 }
 
@@ -730,6 +864,7 @@ fn main() {
         } => cmd_big(paths, min_size, clean),
         Cmd::Docker { prune, clean } => cmd_docker(prune, clean),
         Cmd::Alert { below, no_notify } => cmd_alert(below, no_notify),
+        Cmd::Undo { list, id, yes } => cmd_undo(list, id, yes),
         Cmd::Stats { json } => cmd_stats(json),
         Cmd::Config { action } => cmd_config(action),
         Cmd::Service { action } => cmd_service(action),

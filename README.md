@@ -82,6 +82,12 @@ brew install anggerari/diskdiet/diskdiet           # command line only (macOS an
 
 Pick one. The cask puts **Disk Diet.app** in /Applications and links the `diskdiet` command onto your PATH, so you get both. The formula is for Linux, or if you only want the terminal tool. Installing both makes Homebrew stop with "already a binary at …/bin/diskdiet". To switch to the app, run `brew uninstall anggerari/diskdiet/diskdiet` first.
 
+**Debian / Ubuntu** (x86_64): every release has a `.deb` with both commands, the **Disk Diet** app in your app menu, and its icon. Download it from [Releases](https://github.com/anggerari/diskdiet/releases), then:
+
+```sh
+sudo apt install ./diskdiet_*_amd64.deb
+```
+
 **From source** (Rust toolchain from [rustup.rs](https://rustup.rs)):
 
 ```sh
@@ -102,13 +108,16 @@ diskdiet-gui --scan ~/code   # open and start scanning right away
 
 It's a single native binary of a few megabytes, with no browser engine inside. It follows your system's light or dark theme.
 
+- **A short welcome on first launch**: what "selected" and "needs a look" mean, which folders to scan, and whether to use the Trash.
 - **Everything on one screen**, grouped into Projects, Caches, Docker and Big files, with collapsible groups and counts in the sidebar.
 - **Folder tree in Projects**: projects grouped by the folders they live in, with totals per folder, collapsible, and checkboxes that select a whole folder. Switch to a flat **List** any time.
 - **Filter pills** by ecosystem (Node, Rust, Flutter, Python…), **search** by name or path, and **sort** by size, name or last touched.
 - **Every row tells you why**: ecosystem badge, project name, full path, and status pills such as `uncommitted`, `merged worktree`, `may hold data` or `smart prune`.
 - **Storage card**: live free space, plus how much you'll have *after* cleanup as you select.
 - **Clean everything selected**, or a single item from its row. Reveal anything in Finder first.
+- **Undo**: when Trash mode is on, the "Freed …" banner has an **Undo** button (`⌘Z`) and Stats has **Put back** for the last clean. Everything goes back to where it was.
 - **Stats** (all-time space freed, with history) and **Settings** (folders via the native picker, toggles, save as defaults).
+- **Update notice**: once a day the app reads the public GitHub release list and shows a small card in the sidebar when there's a newer version. It never downloads anything. Turn it off in Settings or with `update_check = false`.
 
 | Shortcut | Action |
 |---|---|
@@ -116,6 +125,7 @@ It's a single native binary of a few megabytes, with no browser engine inside. I
 | `⌘R` | Rescan |
 | `⌘A` | Select / unselect everything visible |
 | `⌘⌫` | Clean up the selection |
+| `⌘Z` | Undo the clean you just did (Trash mode) |
 | `⌘1` … `⌘7` | Switch views |
 | `Esc` | Clear search / close dialog |
 
@@ -127,6 +137,8 @@ diskdiet clean ~/code                   # numbered picker: type "1 3 8" or "2-6"
 diskdiet clean ~/code --tui             # full-screen picker: arrows + space
 diskdiet clean ~ --older-than 30d       # only projects untouched for 30+ days
 diskdiet clean ~/code --trash           # move to Trash instead of deleting
+diskdiet undo                           # changed your mind? put the last --trash clean back
+diskdiet undo --list                    # recent cleans you can still undo
 diskdiet big                            # big files in Downloads, Desktop, Documents, Movies
 diskdiet docker                         # pick Docker images / containers / volumes
 diskdiet docker --prune --docker-all    # bulk prune, like docker system prune -a
@@ -201,7 +213,7 @@ A project folder only counts when its build system file sits next to it. `target
 
 With **smart cache cleanup** (on by default), diskdiet runs `pnpm store prune`, `brew cleanup --prune=all` and `uv cache prune` instead of wiping those caches. That way only stale entries are removed.
 
-**Move to Trash** (`--trash`, or `trash = true` in the config) makes every deletion undoable. The catch is that space is only freed once you empty the Trash. Docker items are always removed permanently.
+**Move to Trash** (`--trash`, or `trash = true` in the config) makes every deletion undoable. diskdiet remembers where each item came from, so `diskdiet undo` (or **Undo** in the app) puts it back in place, as long as you haven't emptied the Trash. If something new already sits at the old path, that item is skipped instead of overwritten. The catch is that space is only freed once you empty the Trash. Permanent deletes and Docker removals can't be undone.
 
 ## Config
 
@@ -216,6 +228,7 @@ trash = false
 picker = "tui"                        # or "numbers"
 skip_caches = ["Maven repository"]
 big_min_size = "500MB"
+update_check = true                   # desktop app: daily "new version?" check
 
 [[rules]]                             # your own junk folders
 dir = "dist"
@@ -255,6 +268,8 @@ make test | lint | fmt
 ## Contributing & releases
 
 PRs are squash-merged, and their titles follow [Conventional Commits](https://www.conventionalcommits.org) (`feat: …`, `fix: …`). [release-please](https://github.com/googleapis/release-please) turns those into a release PR with a version bump and changelog. Merging it publishes a beta release with binaries for macOS and Linux.
+
+Command names, flags, config keys and `--json` fields that scripts rely on are listed in [docs/STABILITY.md](docs/STABILITY.md) and checked by `tests/compat.rs`. The safety rules are checked by `tests/safety.rs`.
 
 ## License
 
