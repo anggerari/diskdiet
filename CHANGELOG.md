@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-beta.4](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.3...v0.1.0-beta.4) (2026-11-28)
+
+
+### Features
+
+* bundle the diskdiet CLI in Disk Diet.app and link it from the cask ([#11](https://github.com/anggerari/diskdiet/issues/11)) ([cdb21dc](https://github.com/anggerari/diskdiet/commit/cdb21dc6fa0ccb4f4d371a0f53c376441e32da98))
+
 ## [0.1.0-beta.3](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.2...v0.1.0-beta.3) (2026-11-27)
 
 
