@@ -73,6 +73,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
             "--docker-volumes",
         ],
     ),
+    (&["undo"], &["--list", "--id", "--yes"]),
     (&["alert"], &["--below", "--no-notify"]),
     (&["stats"], &["--json"]),
     (&["config", "init"], &[]),
@@ -132,6 +133,7 @@ fn every_config_key_still_parses() {
         skip_caches = ["Maven repository"]
         big_min_size = "500MB"
         big_paths = ["~/Downloads"]
+        update_check = false
 
         [[rules]]
         dir = "dist"

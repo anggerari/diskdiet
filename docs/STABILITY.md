@@ -38,7 +38,7 @@ Exit status is `0` on success and `1` on error.
 `~/.config/diskdiet/config.toml` (or `$XDG_CONFIG_HOME/diskdiet/config.toml`).
 
 Keys: `paths` `protected` `exclude` `older_than` `min_size` `trash` `picker`
-`smart_caches` `skip_caches` `big_min_size` `big_paths`, and `[[rules]]` with
+`smart_caches` `skip_caches` `big_min_size` `big_paths` `update_check`, and `[[rules]]` with
 `dir` `markers` `kind`.
 
 Unknown keys are an error on purpose, so a typo never silently turns off a
@@ -59,6 +59,7 @@ Each item has `category` (`project` `cache` `docker` `big`) `kind` `label`
 |---|---|
 | Stats | `<data dir>/diskdiet/stats.json` |
 | Undo log | `<data dir>/diskdiet/undo.json` |
+| Update check cache | `<data dir>/diskdiet/update.json` |
 | macOS jobs | launchd agents `dev.diskdiet.agent` (clean) and `dev.diskdiet.alert` |
 | Linux jobs | systemd user timers `diskdiet.timer` and `diskdiet-alert.timer` |
 
