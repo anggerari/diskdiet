@@ -76,9 +76,11 @@ This installs `diskdiet` (CLI) and `diskdiet-gui` (desktop app) into `~/.local/b
 **Homebrew** (macOS and Linux):
 
 ```sh
-brew install anggerari/diskdiet/diskdiet           # CLI (also includes diskdiet-gui)
-brew install --cask anggerari/diskdiet/diskdiet    # "Disk Diet" app → /Applications (macOS)
+brew install --cask anggerari/diskdiet/diskdiet    # macOS: "Disk Diet" app + the diskdiet command
+brew install anggerari/diskdiet/diskdiet           # command line only (macOS and Linux)
 ```
+
+Pick one. The cask puts **Disk Diet.app** in /Applications and links the `diskdiet` command onto your PATH, so you get both. The formula is for Linux, or if you only want the terminal tool. Installing both makes Homebrew stop with "already a binary at …/bin/diskdiet". To switch to the app, run `brew uninstall anggerari/diskdiet/diskdiet` first.
 
 **From source** (Rust toolchain from [rustup.rs](https://rustup.rs)):
 
