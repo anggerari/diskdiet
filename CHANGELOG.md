@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.0-beta.5](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.4...v0.1.0-beta.5) (2026-11-28)
+
+
+### Features
+
+* daily update notice in the app ([be058fa](https://github.com/anggerari/diskdiet/commit/be058fa3c8f559e3b684af7dba332d611095018b))
+* Debian package for Linux with the desktop app ([be058fa](https://github.com/anggerari/diskdiet/commit/be058fa3c8f559e3b684af7dba332d611095018b))
+* first-run welcome screen in the app ([be058fa](https://github.com/anggerari/diskdiet/commit/be058fa3c8f559e3b684af7dba332d611095018b))
+* undo cleans that used the Trash (diskdiet undo, Undo button, ⌘Z) ([be058fa](https://github.com/anggerari/diskdiet/commit/be058fa3c8f559e3b684af7dba332d611095018b))
+
+
+### Bug Fixes
+
+* a stuck Docker can no longer hang a scan ([be058fa](https://github.com/anggerari/diskdiet/commit/be058fa3c8f559e3b684af7dba332d611095018b))
+
 ## [0.1.0-beta.4](https://github.com/anggerari/diskdiet/compare/v0.1.0-beta.3...v0.1.0-beta.4) (2026-11-28)
 
 
