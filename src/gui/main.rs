@@ -56,6 +56,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let mut app = App::new(&cc.egui_ctx);
+            app.start_update_check(&cc.egui_ctx);
             // `diskdiet-gui --scan [folders...]` starts scanning right away.
             let args: Vec<String> = std::env::args().skip(1).collect();
             if args.first().map(String::as_str) == Some("--scan") {
@@ -185,6 +186,7 @@ struct Shared {
     scan: Option<engine::Scan>,
     progress: (usize, usize),
     done: Option<Finished>,
+    update: Option<String>,
 }
 
 struct Finished {
@@ -243,6 +245,11 @@ struct App {
     // info
     disk: Option<(u64, u64)>,
     stats: stats::Stats,
+    /// Tag of a newer release, if the daily check found one.
+    update: Option<String>,
+    update_check: bool,
+    /// Never opened before: show the welcome guide instead of the plain start screen.
+    first_run: bool,
     /// Dev only: `DISKDIET_SNAPSHOT=out.bmp` saves a screenshot after the
     /// first scan and quits (used to make README images).
     snapshot: Option<(PathBuf, u32)>,
@@ -461,6 +468,31 @@ fn pick_folder() -> Option<String> {
     })
 }
 
+fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = Command::new("open").arg(url).spawn();
+    #[cfg(not(target_os = "macos"))]
+    let _ = Command::new("xdg-open").arg(url).spawn();
+}
+
+fn welcomed_marker() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("diskdiet/welcomed"))
+}
+
+/// Nobody has used Disk Diet here yet (no marker, no config, no cleanups).
+fn is_first_run(home: &Path) -> bool {
+    welcomed_marker().is_some_and(|m| !m.exists())
+        && !config::path(home).exists()
+        && stats::load().runs == 0
+}
+
+fn mark_welcomed() {
+    if let Some(m) = welcomed_marker() {
+        let _ = std::fs::create_dir_all(m.parent().unwrap());
+        let _ = std::fs::write(m, b"");
+    }
+}
+
 fn open_path(p: &Path) {
     #[cfg(target_os = "macos")]
     let _ = Command::new("open").arg("-t").arg(p).spawn();
@@ -630,6 +662,9 @@ impl App {
         App {
             disk: disk_space(&home),
             stats: stats::load(),
+            update: None,
+            update_check: cfg.update_check.unwrap_or(true),
+            first_run: is_first_run(&home),
             trash: cfg.trash,
             smart: cfg.smart_caches.unwrap_or(true),
             older_days: opts
@@ -742,9 +777,25 @@ impl App {
         });
     }
 
+    fn start_update_check(&self, ctx: &egui::Context) {
+        if !self.update_check || self.snapshot.is_some() {
+            return;
+        }
+        let (shared, ctx) = (self.shared.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            if let Some(tag) = diskdiet::update::newer_release() {
+                shared.lock().unwrap().update = Some(tag);
+                ctx.request_repaint();
+            }
+        });
+    }
+
     /// Pull results from worker threads.
     fn poll(&mut self) {
         let mut s = self.shared.lock().unwrap();
+        if let Some(tag) = s.update.take() {
+            self.update = Some(tag);
+        }
         if let Some(scan) = s.scan.take() {
             self.warnings = scan.warnings;
             self.rows = scan
@@ -1072,7 +1123,10 @@ impl App {
     }
 
     fn snapshot_tick(&mut self, ctx: &egui::Context) {
-        if !self.scanned || self.phase == Phase::Scanning {
+        let welcome = std::env::var("DISKDIET_SNAPSHOT_VIEW").as_deref() == Ok("welcome");
+        if welcome && self.snapshot.is_some() {
+            self.first_run = true;
+        } else if !self.scanned || self.phase == Phase::Scanning {
             return;
         }
         let Some((path, frames)) = self.snapshot.as_mut() else {
@@ -1099,6 +1153,9 @@ impl App {
                     self.shared.lock().unwrap().progress = (5, 23);
                 }
                 _ => {}
+            }
+            if let Ok(tag) = std::env::var("DISKDIET_SNAPSHOT_UPDATE") {
+                self.update = Some(tag);
             }
             if std::env::var("DISKDIET_SNAPSHOT_THEME").as_deref() == Ok("light") {
                 ctx.set_theme(egui::Theme::Light);
@@ -1250,6 +1307,10 @@ impl App {
                     ui.painter().galley(r.center() - g.size() / 2.0, g, p.warn);
                 });
                 ui.add_space(18.0);
+                if let Some(tag) = self.update.clone() {
+                    self.update_card(ui, &tag, p);
+                    ui.add_space(14.0);
+                }
 
                 section_label(ui, "CLEAN UP", p);
                 ui.add_space(2.0);
@@ -1417,7 +1478,226 @@ impl App {
         });
     }
 
+    fn update_card(&mut self, ui: &mut Ui, tag: &str, p: &Palette) {
+        let resp = egui::Frame::new()
+            .fill(p.accent.gamma_multiply(0.10))
+            .stroke(Stroke::new(1.0, p.accent.gamma_multiply(0.45)))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("Update available")
+                        .size(12.5)
+                        .strong()
+                        .color(p.text),
+                );
+                ui.label(
+                    RichText::new(format!("{tag} · see what's new"))
+                        .size(11.5)
+                        .color(p.accent),
+                );
+            })
+            .response
+            .interact(Sense::click())
+            .on_hover_text(if cfg!(target_os = "macos") {
+                "Opens the release notes.\nUpdate with: brew upgrade --cask anggerari/diskdiet/diskdiet"
+            } else {
+                "Opens the release notes.\nUpdate with: brew upgrade anggerari/diskdiet/diskdiet, or rerun the install script"
+            });
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            open_url(&format!("{}/tag/{tag}", diskdiet::update::RELEASES));
+        }
+    }
+
+    /// First launch: what the colors mean, where to look, and Trash mode.
+    fn onboarding(&mut self, ui: &mut Ui, p: &Palette) {
+        let ctx = ui.ctx().clone();
+        let home = self.home.clone();
+        let width = 560.0_f32.min(ui.available_width() - 32.0);
+        let mut start = false;
+        let mut skip = false;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(12.0);
+            ui.vertical_centered(|ui| {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
+                icons::mark(ui.painter(), r, p.accent, p.bg);
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new("Welcome to Disk Diet")
+                        .size(24.0)
+                        .strong()
+                        .color(p.text),
+                );
+                ui.add_space(4.0);
+                ui.allocate_ui(Vec2::new(width, 0.0), |ui| {
+                    ui.label(
+                        RichText::new(
+                            "It finds space you can safely take back: build folders, package caches, Docker leftovers and big forgotten files. Nothing is deleted until you click Clean up.",
+                        )
+                        .color(p.dim),
+                    );
+                });
+                ui.add_space(18.0);
+
+                ui.allocate_ui(Vec2::new(width, 0.0), |ui| {
+                    card(ui, p, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                            let tip = |ui: &mut Ui, icon: Icon, color: Color32, title: &str, body: &str| {
+                                ui.horizontal_top(|ui| {
+                                    ui.add_space(2.0);
+                                    icons::icon(ui, icon, 16.0, color);
+                                    ui.add_space(4.0);
+                                    ui.vertical(|ui| {
+                                        ui.label(RichText::new(title).strong().color(p.text));
+                                        ui.label(RichText::new(body).size(12.0).color(p.dim));
+                                    });
+                                });
+                                ui.add_space(8.0);
+                            };
+                            tip(
+                                ui,
+                                Icon::Check,
+                                p.accent,
+                                "Selected means safe",
+                                "Build output and caches your tools download or rebuild on their own.",
+                            );
+                            tip(
+                                ui,
+                                Icon::Warning,
+                                p.warn,
+                                "Needs a look",
+                                "Projects with uncommitted git changes, or Docker data that might matter. Never selected for you.",
+                            );
+                            tip(
+                                ui,
+                                Icon::Trash,
+                                p.dim,
+                                "Changed your mind?",
+                                "With Trash mode on, every cleanup can be undone with one click.",
+                            );
+                        });
+                    });
+                });
+                ui.add_space(12.0);
+
+                ui.allocate_ui(Vec2::new(width, 0.0), |ui| {
+                    card(ui, p, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                            ui.label(RichText::new("Where are your projects?").strong().color(p.text));
+                            ui.label(
+                                RichText::new("Disk Diet looks for project junk here. Caches and Docker are found on their own.")
+                                    .size(12.0)
+                                    .color(p.faint),
+                            );
+                            ui.add_space(6.0);
+                            let mut remove = None;
+                            let many = self.paths.len() > 1;
+                            for (i, f) in self.paths.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    icons::icon(ui, Icon::Folder, 15.0, p.dim);
+                                    ui.label(RichText::new(f).monospace().color(p.text));
+                                    if f == "~" {
+                                        ui.label(
+                                            RichText::new("your home folder")
+                                                .size(12.0)
+                                                .color(p.faint),
+                                        );
+                                    }
+                                    if many {
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            if icons::icon_button(ui, Icon::Close, p.faint, p.danger, "Remove")
+                                                .clicked()
+                                            {
+                                                remove = Some(i);
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                self.paths.remove(i);
+                            }
+                            ui.add_space(4.0);
+                            if ui.button("Add folder…").clicked() {
+                                if let Some(f) = pick_folder() {
+                                    let f = pretty_path(Path::new(&f), &home);
+                                    if !self.paths.contains(&f) {
+                                        // Swap the home-folder default for something specific.
+                                        if self.paths == ["~"] {
+                                            self.paths.clear();
+                                        }
+                                        self.paths.push(f);
+                                    }
+                                }
+                            }
+                            ui.add_space(10.0);
+                            let mut trash = self.trash;
+                            setting_row(
+                                ui,
+                                p,
+                                "Move to Trash instead of deleting",
+                                "Lets you undo. Space comes back once you empty the Trash.",
+                                |ui| {
+                                    toggle(ui, &mut trash, p);
+                                },
+                            );
+                            self.trash = trash;
+                        });
+                    });
+                });
+                ui.add_space(14.0);
+                if primary_button(ui, "   Start scanning   ", p.accent, p.on_accent, !self.paths.is_empty())
+                    .clicked()
+                {
+                    start = true;
+                }
+                ui.add_space(6.0);
+                if ui
+                    .link(RichText::new("Skip for now").size(12.0).color(p.faint))
+                    .clicked()
+                {
+                    skip = true;
+                }
+                ui.add_space(24.0);
+            });
+        });
+        if start {
+            let vals = [
+                (
+                    "paths",
+                    toml::Value::Array(
+                        self.paths
+                            .iter()
+                            .map(|s| toml::Value::String(s.clone()))
+                            .collect(),
+                    ),
+                ),
+                ("trash", toml::Value::Boolean(self.trash)),
+            ];
+            if config::save_defaults(&home, &vals).is_ok() {
+                self.cfg = Config::load(&home).unwrap_or_default();
+            }
+        }
+        if start || skip {
+            mark_welcomed();
+            self.first_run = false;
+        }
+        if start {
+            self.start_scan(&ctx);
+        }
+    }
+
     fn welcome(&mut self, ui: &mut Ui, p: &Palette) {
+        if self.first_run && self.phase != Phase::Scanning {
+            self.onboarding(ui, p);
+            return;
+        }
         let ctx = ui.ctx().clone();
         ui.add_space((ui.available_height() * 0.22).max(20.0));
         ui.vertical_centered(|ui| {
@@ -2711,6 +2991,24 @@ impl App {
             });
             ui.add_space(12.0);
 
+            card(ui, p, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("App").strong().color(p.text));
+                ui.add_space(8.0);
+                let mut check = self.update_check;
+                setting_row(
+                    ui,
+                    p,
+                    "Check for updates",
+                    "Once a day, reads the public release list on GitHub. Nothing is downloaded or sent.",
+                    |ui| {
+                        toggle(ui, &mut check, p);
+                    },
+                );
+                self.update_check = check;
+            });
+            ui.add_space(12.0);
+
             ui.horizontal(|ui| {
                 if primary_button(ui, "  Save as defaults  ", p.accent, p.on_accent, true)
                     .clicked()
@@ -2727,6 +3025,7 @@ impl App {
                         ),
                         ("trash", toml::Value::Boolean(self.trash)),
                         ("smart_caches", toml::Value::Boolean(self.smart)),
+                        ("update_check", toml::Value::Boolean(self.update_check)),
                         ("min_size", toml::Value::String(format!("{}MB", self.min_mb))),
                     ];
                     if self.older_days > 0 {

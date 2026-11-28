@@ -102,6 +102,7 @@ diskdiet-gui --scan ~/code   # open and start scanning right away
 
 It's a single native binary of a few megabytes, with no browser engine inside. It follows your system's light or dark theme.
 
+- **A short welcome on first launch**: what "selected" and "needs a look" mean, which folders to scan, and whether to use the Trash.
 - **Everything on one screen**, grouped into Projects, Caches, Docker and Big files, with collapsible groups and counts in the sidebar.
 - **Folder tree in Projects**: projects grouped by the folders they live in, with totals per folder, collapsible, and checkboxes that select a whole folder. Switch to a flat **List** any time.
 - **Filter pills** by ecosystem (Node, Rust, Flutter, Python…), **search** by name or path, and **sort** by size, name or last touched.
@@ -109,6 +110,7 @@ It's a single native binary of a few megabytes, with no browser engine inside. I
 - **Storage card**: live free space, plus how much you'll have *after* cleanup as you select.
 - **Clean everything selected**, or a single item from its row. Reveal anything in Finder first.
 - **Stats** (all-time space freed, with history) and **Settings** (folders via the native picker, toggles, save as defaults).
+- **Update notice**: once a day the app reads the public GitHub release list and shows a small card in the sidebar when there's a newer version. It never downloads anything. Turn it off in Settings or with `update_check = false`.
 
 | Shortcut | Action |
 |---|---|
@@ -216,6 +218,7 @@ trash = false
 picker = "tui"                        # or "numbers"
 skip_caches = ["Maven repository"]
 big_min_size = "500MB"
+update_check = true                   # desktop app: daily "new version?" check
 
 [[rules]]                             # your own junk folders
 dir = "dist"
