@@ -82,6 +82,12 @@ brew install anggerari/diskdiet/diskdiet           # command line only (macOS an
 
 Pick one. The cask puts **Disk Diet.app** in /Applications and links the `diskdiet` command onto your PATH, so you get both. The formula is for Linux, or if you only want the terminal tool. Installing both makes Homebrew stop with "already a binary at …/bin/diskdiet". To switch to the app, run `brew uninstall anggerari/diskdiet/diskdiet` first.
 
+**Debian / Ubuntu** (x86_64): every release has a `.deb` with both commands, the **Disk Diet** app in your app menu, and its icon. Download it from [Releases](https://github.com/anggerari/diskdiet/releases), then:
+
+```sh
+sudo apt install ./diskdiet_*_amd64.deb
+```
+
 **From source** (Rust toolchain from [rustup.rs](https://rustup.rs)):
 
 ```sh
