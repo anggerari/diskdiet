@@ -130,13 +130,35 @@ impl Obj {
 
 /// True when the docker CLI exists and the daemon is reachable.
 pub fn available() -> bool {
-    Command::new("docker")
+    available_within(std::time::Duration::from_secs(10))
+}
+
+/// Whether the Docker daemon answers within `limit`. Docker Desktop can hang
+/// on `docker info` while it starts up; a scan shouldn't hang with it.
+pub fn available_within(limit: std::time::Duration) -> bool {
+    let Ok(mut child) = Command::new("docker")
         .args(["info", "--format", "{{.ServerVersion}}"])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .spawn()
+    else {
+        return false;
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if start.elapsed() < limit => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 /// Docker prints decimal (SI) sizes: "1.108GB", "462.9kB", "2B", "N/A".

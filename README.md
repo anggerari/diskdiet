@@ -260,6 +260,8 @@ make test | lint | fmt
 
 PRs are squash-merged, and their titles follow [Conventional Commits](https://www.conventionalcommits.org) (`feat: …`, `fix: …`). [release-please](https://github.com/googleapis/release-please) turns those into a release PR with a version bump and changelog. Merging it publishes a beta release with binaries for macOS and Linux.
 
+Command names, flags, config keys and `--json` fields that scripts rely on are listed in [docs/STABILITY.md](docs/STABILITY.md) and checked by `tests/compat.rs`. The safety rules are checked by `tests/safety.rs`.
+
 ## License
 
 MIT
