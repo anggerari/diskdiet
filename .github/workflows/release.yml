@@ -74,8 +74,11 @@ jobs:
             scripts/bundle-macos.sh "$BIN/diskdiet-gui" "$OUT" "${TAG#v}"
             (cd "$OUT" && ditto -c -k --keepParent "Disk Diet.app" "diskdiet-app-${TAG}-${{ matrix.target }}.zip")
           fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            scripts/package-deb.sh "$BIN" "$OUT" "${TAG#v}" amd64
+          fi
           cd "$OUT"
-          for f in *.tar.gz *.zip; do
+          for f in *.tar.gz *.zip *.deb; do
             [ -f "$f" ] && shasum -a 256 "$f" > "$f.sha256"
           done
           ls -la
@@ -83,7 +86,7 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.sha256 --clobber
+          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.deb dist/*.sha256 --clobber
 
   homebrew:
     needs: [release-please, build]

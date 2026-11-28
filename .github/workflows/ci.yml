@@ -26,4 +26,17 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
       - name: Shell scripts parse
-        run: sh -n install.sh && sh -n scripts/bundle-macos.sh && sh -n scripts/homebrew-formula.sh && sh -n scripts/homebrew-cask.sh
+        run: sh -n install.sh && sh -n scripts/bundle-macos.sh && sh -n scripts/homebrew-formula.sh && sh -n scripts/homebrew-cask.sh && sh -n scripts/package-deb.sh
+      - name: Debian package installs and runs
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          cargo build --features gui
+          scripts/package-deb.sh target/debug dist 0.0.0-ci.1 amd64
+          sudo apt-get install -y desktop-file-utils
+          sudo apt-get install -y ./dist/diskdiet_0.0.0-ci.1_amd64.deb
+          dpkg -s diskdiet | grep -q '^Version: 0.0.0~ci.1$'
+          diskdiet --version
+          test -x /usr/bin/diskdiet-gui
+          desktop-file-validate /usr/share/applications/diskdiet.desktop
+          sudo apt-get remove -y diskdiet
