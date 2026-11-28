@@ -45,7 +45,7 @@ fn scans_survive_any_kind_of_broken_docker() {
     assert!(s.items.is_empty());
 
     // Daemon hangs (Docker Desktop starting up): give up instead of waiting.
-    set_docker(Some("sleep 30"));
+    set_docker(Some("exec /bin/sleep 30"));
     let t = Instant::now();
     assert!(!diskdiet::docker::available_within(Duration::from_millis(
         500
