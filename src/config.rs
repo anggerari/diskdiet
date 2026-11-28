@@ -34,6 +34,8 @@ pub struct Config {
     pub big_min_size: Option<String>,
     /// Folders searched in "big files" mode.
     pub big_paths: Vec<String>,
+    /// Desktop app: check GitHub once a day for a newer release. Default true.
+    pub update_check: Option<bool>,
     /// Extra artifact rules.
     pub rules: Vec<CustomRule>,
 }
@@ -88,6 +90,10 @@ pub const TEMPLATE: &str = r#"# diskdiet config (beta)
 # Big files mode.
 # big_min_size = "500MB"
 # big_paths = ["~/Downloads", "~/Desktop", "~/Documents", "~/Movies"]
+
+# Desktop app: look for a newer release once a day (reads the public
+# GitHub releases feed; nothing is downloaded or sent).
+# update_check = true
 
 # Extra folders to treat as junk.
 # [[rules]]
