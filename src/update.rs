@@ -95,7 +95,7 @@ fn check_with(path: &Path, now: u64, fetch: impl FnOnce() -> Option<String>) -> 
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    if now.saturating_sub(cached.checked_at) < DAY {
+    if cached.checked_at > 0 && now.saturating_sub(cached.checked_at) < DAY {
         return cached.latest;
     }
     let latest = fetch();
