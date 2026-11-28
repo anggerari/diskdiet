@@ -39,6 +39,11 @@ trash = "5"
 eframe = { version = "0.37", optional = true }
 egui_extras = { version = "0.37", optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Already pulled in by `trash`; used directly to learn where trashed items land
+# so a clean can be undone.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+
 [profile.release]
 lto = true
 strip = true

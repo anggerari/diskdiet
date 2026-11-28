@@ -11,6 +11,7 @@ pub mod service;
 pub mod stats;
 pub mod targets;
 pub mod trashcan;
+pub mod undo;
 pub mod util;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

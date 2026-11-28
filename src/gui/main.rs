@@ -26,7 +26,7 @@ use diskdiet::config::{self, Config};
 use diskdiet::docker::{Kind as DockerKind, Tier};
 use diskdiet::engine::{self, Category, DeleteOptions, Item, Options, Outcome, What};
 use diskdiet::util::{disk_space, expand_tilde, has_command, human_bytes, now_secs, pretty_path};
-use diskdiet::{stats, VERSION};
+use diskdiet::{stats, undo, VERSION};
 use icons::Icon;
 use theme::Palette;
 
@@ -185,6 +185,7 @@ struct Shared {
     scan: Option<engine::Scan>,
     progress: (usize, usize),
     done: Option<Finished>,
+    restored: Option<Result<undo::Restored, String>>,
 }
 
 struct Finished {
@@ -198,6 +199,8 @@ struct Toast {
     title: String,
     body: String,
     errors: Vec<String>,
+    /// Id of a clean the toast offers to undo.
+    undo: Option<u64>,
 }
 
 struct App {
@@ -243,6 +246,8 @@ struct App {
     // info
     disk: Option<(u64, u64)>,
     stats: stats::Stats,
+    /// Newest clean that can still be put back from the Trash.
+    last_undo: Option<undo::Clean>,
     /// Dev only: `DISKDIET_SNAPSHOT=out.bmp` saves a screenshot after the
     /// first scan and quits (used to make README images).
     snapshot: Option<(PathBuf, u32)>,
@@ -630,6 +635,7 @@ impl App {
         App {
             disk: disk_space(&home),
             stats: stats::load(),
+            last_undo: undo::last_restorable(),
             trash: cfg.trash,
             smart: cfg.smart_caches.unwrap_or(true),
             older_days: opts
@@ -723,10 +729,11 @@ impl App {
         std::thread::spawn(move || {
             let before = diskdiet::util::free_space(&home);
             let refs: Vec<&Item> = idx.iter().map(|&i| &items[i]).collect();
-            let outcome = engine::delete(&refs, &home, opts, &|done, total| {
+            let mut outcome = engine::delete(&refs, &home, opts, &|done, total| {
                 shared.lock().unwrap().progress = (done, total);
                 ctx.request_repaint();
             });
+            let _ = undo::record(std::mem::take(&mut outcome.undo), "gui");
             let _ = stats::record(
                 outcome.freed,
                 outcome.trashed,
@@ -738,6 +745,35 @@ impl App {
                 removed: idx,
                 before,
             });
+            ctx.request_repaint();
+        });
+    }
+
+    /// Put back a clean from the Trash, then rescan so the items show again.
+    fn start_restore(&mut self, ctx: &egui::Context, id: u64) {
+        if self.phase != Phase::Idle {
+            return;
+        }
+        self.phase = Phase::Scanning;
+        self.scan_started = Instant::now();
+        self.toast = None;
+        self.pending = None;
+        let (opts, cfg, home) = (self.options(), self.cfg.clone(), self.home.clone());
+        let (shared, ctx) = (self.shared.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let report = |m: &str| {
+                shared.lock().unwrap().message = m.to_string();
+                ctx.request_repaint();
+            };
+            let res = undo::restore(id, &|done, total| {
+                report(&format!("Putting back {done} of {total}…"))
+            })
+            .map_err(|e| format!("{e:#}"));
+            report("Scanning…");
+            let scan = engine::gather(&opts, &cfg, &home, &report);
+            let mut s = shared.lock().unwrap();
+            s.restored = Some(res);
+            s.scan = Some(scan);
             ctx.request_repaint();
         });
     }
@@ -760,6 +796,33 @@ impl App {
             self.kind_filter = None;
             self.disk = disk_space(&self.home);
         }
+        if let Some(res) = s.restored.take() {
+            self.last_undo = undo::last_restorable();
+            self.toast = Some(match res {
+                Ok(r) => Toast {
+                    ok: r.skipped.is_empty(),
+                    title: if r.bytes > 0 {
+                        format!("Put back {} from the Trash", human_bytes(r.bytes))
+                    } else {
+                        format!("Put back {} item(s) from the Trash", r.restored)
+                    },
+                    body: if r.skipped.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{} item(s) couldn't be put back", r.skipped.len())
+                    },
+                    errors: r.skipped,
+                    undo: None,
+                },
+                Err(e) => Toast {
+                    ok: false,
+                    title: "Couldn't undo that clean".into(),
+                    body: e,
+                    errors: Vec::new(),
+                    undo: None,
+                },
+            });
+        }
         if let Some(done) = s.done.take() {
             let o = &done.outcome;
             for &i in &done.removed {
@@ -776,6 +839,7 @@ impl App {
             }
             self.disk = disk_space(&self.home);
             self.stats = stats::load();
+            self.last_undo = undo::last_restorable();
             let mut body = Vec::new();
             if let (Some(b), Some((_, after))) = (done.before, self.disk) {
                 body.push(format!(
@@ -804,6 +868,9 @@ impl App {
                 },
                 body: body.join(" · "),
                 errors: o.errors.clone(),
+                undo: (o.trashed > 0)
+                    .then(|| self.last_undo.as_ref().map(|c| c.at))
+                    .flatten(),
             });
             self.phase = Phase::Idle;
         }
@@ -1115,7 +1182,7 @@ impl App {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let typing = ctx.egui_wants_keyboard_input();
-        let (find, rescan, all, del, esc, nums) = ctx.input_mut(|i| {
+        let (find, rescan, all, del, esc, nums, undo_key) = ctx.input_mut(|i| {
             let nums: Vec<bool> = [
                 Key::Num1,
                 Key::Num2,
@@ -1135,8 +1202,16 @@ impl App {
                 i.consume_key(Modifiers::COMMAND, Key::Backspace),
                 i.key_pressed(Key::Escape),
                 nums,
+                !typing && i.consume_key(Modifiers::COMMAND, Key::Z),
             )
         });
+        // ⌘Z undoes the clean the banner is offering, nothing older.
+        if let Some(id) = undo_key
+            .then(|| self.toast.as_ref().and_then(|t| t.undo))
+            .flatten()
+        {
+            self.start_restore(ctx, id);
+        }
         if find {
             if self.view_category().is_none() {
                 self.view = View::Cleanup(None);
@@ -1731,6 +1806,7 @@ impl App {
         let Some(t) = &self.toast else { return };
         let color = if t.ok { p.ok } else { p.warn };
         let mut close = false;
+        let mut undo_id = None;
         egui::Frame::new()
             .fill(color.gamma_multiply(0.10))
             .stroke(Stroke::new(1.0, color.gamma_multiply(0.45)))
@@ -1765,11 +1841,23 @@ impl App {
                         {
                             close = true;
                         }
+                        if let Some(id) = t.undo {
+                            if ui
+                                .button(RichText::new("Undo").color(p.text))
+                                .on_hover_text("Put everything back from the Trash (⌘Z)")
+                                .clicked()
+                            {
+                                undo_id = Some(id);
+                            }
+                        }
                     });
                 });
             });
         if close {
             self.toast = None;
+        }
+        if let Some(id) = undo_id {
+            self.start_restore(ui.ctx(), id);
         }
         ui.add_space(10.0);
     }
@@ -2435,7 +2523,6 @@ impl App {
     }
 
     fn stats_view(&mut self, ui: &mut Ui, p: &Palette) {
-        let s = &self.stats;
         ui.label(RichText::new("Stats").size(21.0).strong().color(p.text));
         ui.label(
             RichText::new("Everything Disk Diet has cleaned on this computer: CLI, app and background service.")
@@ -2443,6 +2530,47 @@ impl App {
                 .color(p.dim),
         );
         ui.add_space(16.0);
+        if let Some(c) = self.last_undo.clone() {
+            let mut go = false;
+            card(ui, p, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Changed your mind?").strong().color(p.text));
+                        let n = {
+                            let mut l: Vec<&str> = c.pending().map(|e| e.label.as_str()).collect();
+                            l.dedup();
+                            l.len()
+                        };
+                        ui.label(
+                            RichText::new(format!(
+                                "The clean from {} moved {} item(s), {} to the Trash. Put them back where they were.",
+                                age_words(now_secs().saturating_sub(c.at) / 86_400),
+                                n,
+                                human_bytes(c.pending_size())
+                            ))
+                            .size(12.0)
+                            .color(p.dim),
+                        );
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let enabled = self.phase == Phase::Idle;
+                        if ui
+                            .add_enabled(enabled, egui::Button::new("Put back"))
+                            .clicked()
+                        {
+                            go = true;
+                        }
+                    });
+                });
+            });
+            if go {
+                self.start_restore(ui.ctx(), c.at);
+                self.view = View::Cleanup(None);
+            }
+            ui.add_space(16.0);
+        }
+        let s = &self.stats;
         if s.runs == 0 {
             card(ui, p, |ui| {
                 ui.set_width(ui.available_width());

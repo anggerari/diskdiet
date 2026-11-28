@@ -108,6 +108,7 @@ It's a single native binary of a few megabytes, with no browser engine inside. I
 - **Every row tells you why**: ecosystem badge, project name, full path, and status pills such as `uncommitted`, `merged worktree`, `may hold data` or `smart prune`.
 - **Storage card**: live free space, plus how much you'll have *after* cleanup as you select.
 - **Clean everything selected**, or a single item from its row. Reveal anything in Finder first.
+- **Undo**: when Trash mode is on, the "Freed …" banner has an **Undo** button (`⌘Z`) and Stats has **Put back** for the last clean. Everything goes back to where it was.
 - **Stats** (all-time space freed, with history) and **Settings** (folders via the native picker, toggles, save as defaults).
 
 | Shortcut | Action |
@@ -116,6 +117,7 @@ It's a single native binary of a few megabytes, with no browser engine inside. I
 | `⌘R` | Rescan |
 | `⌘A` | Select / unselect everything visible |
 | `⌘⌫` | Clean up the selection |
+| `⌘Z` | Undo the clean you just did (Trash mode) |
 | `⌘1` … `⌘7` | Switch views |
 | `Esc` | Clear search / close dialog |
 
@@ -127,6 +129,8 @@ diskdiet clean ~/code                   # numbered picker: type "1 3 8" or "2-6"
 diskdiet clean ~/code --tui             # full-screen picker: arrows + space
 diskdiet clean ~ --older-than 30d       # only projects untouched for 30+ days
 diskdiet clean ~/code --trash           # move to Trash instead of deleting
+diskdiet undo                           # changed your mind? put the last --trash clean back
+diskdiet undo --list                    # recent cleans you can still undo
 diskdiet big                            # big files in Downloads, Desktop, Documents, Movies
 diskdiet docker                         # pick Docker images / containers / volumes
 diskdiet docker --prune --docker-all    # bulk prune, like docker system prune -a
@@ -201,7 +205,7 @@ A project folder only counts when its build system file sits next to it. `target
 
 With **smart cache cleanup** (on by default), diskdiet runs `pnpm store prune`, `brew cleanup --prune=all` and `uv cache prune` instead of wiping those caches. That way only stale entries are removed.
 
-**Move to Trash** (`--trash`, or `trash = true` in the config) makes every deletion undoable. The catch is that space is only freed once you empty the Trash. Docker items are always removed permanently.
+**Move to Trash** (`--trash`, or `trash = true` in the config) makes every deletion undoable. diskdiet remembers where each item came from, so `diskdiet undo` (or **Undo** in the app) puts it back in place, as long as you haven't emptied the Trash. If something new already sits at the old path, that item is skipped instead of overwritten. The catch is that space is only freed once you empty the Trash. Permanent deletes and Docker removals can't be undone.
 
 ## Config
 
