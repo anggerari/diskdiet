@@ -22,7 +22,10 @@ cask "diskdiet" do
 
   depends_on macos: :big_sur
 
+  # The app and the \`diskdiet\` CLI ship together. Install this cask OR the
+  # diskdiet formula, not both: they would both link bin/diskdiet.
   app "Disk Diet.app"
+  binary "#{appdir}/Disk Diet.app/Contents/MacOS/diskdiet"
 
   # The app is not notarized yet (beta); let it open without a Gatekeeper prompt.
   postflight_steps do

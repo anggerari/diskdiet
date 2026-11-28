@@ -1,5 +1,7 @@
 #!/bin/sh
 # Wrap the GUI binary in a minimal macOS app bundle: "Disk Diet.app".
+# The `diskdiet` CLI next to the GUI binary is bundled too, so the Homebrew
+# cask can link it onto PATH.
 # usage: scripts/bundle-macos.sh <path/to/diskdiet-gui> <out-dir> <version>
 set -eu
 BIN="$1"
@@ -10,6 +12,13 @@ ICON="$(dirname "$0")/../assets/DiskDiet.icns"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/diskdiet-gui"
+CLI="$(dirname "$BIN")/diskdiet"
+if [ -x "$CLI" ]; then
+  cp "$CLI" "$APP/Contents/MacOS/diskdiet"
+else
+  echo "error: $CLI not found; build the diskdiet CLI first" >&2
+  exit 1
+fi
 cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

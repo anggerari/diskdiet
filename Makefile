@@ -63,7 +63,7 @@ gui: ## Run the desktop app
 gui-release: ## Build the desktop app (target/release/diskdiet-gui)
 	$(CARGO) build --release --features gui --bin diskdiet-gui
 
-app: gui-release ## Build "dist/Disk Diet.app" (macOS)
+app: release gui-release ## Build "dist/Disk Diet.app" with the CLI inside (macOS)
 	scripts/bundle-macos.sh target/release/diskdiet-gui dist $(VERSION)
 
 ## ---- Develop ---------------------------------------------------------------
