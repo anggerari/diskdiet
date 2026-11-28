@@ -23,8 +23,9 @@ fn scans_survive_any_kind_of_broken_docker() {
             fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
         }
     };
-    // Only the fake docker (or none) on PATH, plus the basics.
-    std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.display()));
+    // Only the fake docker (or none) on PATH. The fakes use absolute
+    // #!/bin/sh, and a real docker in /usr/bin must not be found.
+    std::env::set_var("PATH", &dir);
 
     let mut opts = Options::from_config(&Config::default(), &dir);
     opts.projects = false;
